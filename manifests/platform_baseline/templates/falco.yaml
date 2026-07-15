@@ -1,0 +1,55 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: falco
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: platform-baseline
+    app.kubernetes.io/component: security
+spec:
+  project: {{ .Values.falco.project }}
+  source:
+    repoURL: https://falcosecurity.github.io/charts
+    chart: falco
+    targetRevision: {{ .Values.falco.chart_version }}
+    helm:
+      values: |
+        driver:
+          kind: {{ .Values.falco.driver.kind }}
+        mounts:
+          volumes:
+            - name: falco-custom-rules
+              configMap:
+                name: falco-custom-rules
+                optional: true
+          volumeMounts:
+            - name: falco-custom-rules
+              mountPath: /etc/falco/rules.d
+        falcosidekick:
+          enabled: {{ .Values.falco.falcosidekick.enabled }}
+          webui:
+            enabled: {{ .Values.falco.falcosidekick.webui.enabled }}
+            redis:
+              storageEnabled: {{ .Values.falco.falcosidekick.webui.redis.storageEnabled }}
+              storageSize: {{ .Values.falco.falcosidekick.webui.redis.storageSize }}
+        tty: true
+        resources:
+          requests:
+            cpu: {{ .Values.falco.resources.requests.cpu }}
+            memory: {{ .Values.falco.resources.requests.memory }}
+          limits:
+            memory: {{ .Values.falco.resources.limits.memory }}
+        falco:
+          json_output: {{ .Values.falco.falco.json_output }}
+          log_level: {{ .Values.falco.falco.log_level }}
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: {{ .Values.falco.namespace }}
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

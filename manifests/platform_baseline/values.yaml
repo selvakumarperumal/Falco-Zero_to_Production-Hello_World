@@ -1,0 +1,38 @@
+# Platform Baseline Values
+# Falco - Runtime Security Monitoring
+
+falco:
+  # Falco Helm Chart version from falcosecurity/charts
+  chart_version: "9.1.0"
+  # Target namespace for Falco deployment
+  namespace: "falco"
+  # ArgoCD project to assign the Application to
+  project: "security"
+
+  # Driver configuration
+  driver:
+    # modern_ebpf is recommended for kernels 5.8+ (no init container needed)
+    kind: "modern_ebpf"
+
+  # Resource requests and limits for Falco pods
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "512Mi"
+    limits:
+      memory: "1Gi"
+
+  # Falcosidekick configuration
+  falcosidekick:
+    enabled: true
+    # Falcosidekick UI - access via: kubectl port-forward svc/falco-falcosidekick-ui -n falco 2802:2802
+    webui:
+      enabled: true
+      redis:
+        storageEnabled: true
+        storageSize: "1Gi"
+
+  # Falco engine configuration
+  falco:
+    json_output: true
+    log_level: "info"

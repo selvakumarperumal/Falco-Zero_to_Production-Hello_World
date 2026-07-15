@@ -1,0 +1,24 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-custom-rules
+  namespace: falco
+  labels:
+    app.kubernetes.io/part-of: falco
+    app.kubernetes.io/component: custom-rules
+data:
+  hello-world-rules.yaml: |-
+    - rule: Unexpected Shell in Hello World Pod
+      desc: >
+        Detects an interactive shell spawned inside the hello-world pod.
+      condition: >
+        spawned_process and
+        container and
+        k8s.pod.name = "hello-world" and
+        proc.name in (bash, sh, zsh)
+      output: >
+        Shell spawned in hello-world pod (user=%user.name command=%proc.cmdline
+        pod=%k8s.pod.name container=%container.id image=%container.image.repository)
+      priority: WARNING
+      tags: [demo, shell, mitre_execution]
