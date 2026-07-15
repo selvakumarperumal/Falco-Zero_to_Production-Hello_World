@@ -1,0 +1,53 @@
+---
+# ArgoCD AppProject — scopes what the security applications can access
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: security
+  namespace: argocd
+spec:
+  description: Security tools — Falco, Falcosidekick
+  # Allow deploying to any namespace on the in-cluster server
+  destinations:
+    - namespace: "*"
+      server: https://kubernetes.default.svc
+  # Allow any Helm repo or Git source
+  sourceRepos:
+    - "*"
+  # Allow all cluster-scoped and namespaced resources
+  clusterResourceWhitelist:
+    - group: "*"
+      kind: "*"
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"
+
+---
+# Root App of Apps — ArgoCD renders the platform-baseline Helm chart
+# and creates child Applications (falco, reloader)
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-baseline
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: platform-baseline
+    app.kubernetes.io/component: root
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/selvakumarperumal/Falco-Zero_to_Production-Hello_World.git
+    targetRevision: main
+    path: manifests/platform_baseline
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
