@@ -1,0 +1,29 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: reloader
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: platform-baseline
+    app.kubernetes.io/component: operations
+spec:
+  project: {{ .Values.reloader.project }}
+  source:
+    repoURL: https://stakater.github.io/stakater-charts
+    chart: reloader
+    targetRevision: {{ .Values.reloader.chart_version }}
+    helm:
+      values: |
+        reloader:
+          watchGlobally: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: {{ .Values.reloader.namespace }}
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

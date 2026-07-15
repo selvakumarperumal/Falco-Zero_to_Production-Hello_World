@@ -36,3 +36,9 @@ falco:
   falco:
     json_output: true
     log_level: "info"
+
+# Stakater Reloader - Auto-restart pods when ConfigMaps change
+reloader:
+  chart_version: "1.2.0"
+  namespace: "kube-system"
+  project: "default"
