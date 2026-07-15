@@ -220,7 +220,118 @@ flowchart TB
 
 ---
 
-## Part 4 — Day-2 Operations
+## Part 4 — Stakater Reloader: Auto-Restart on Rule Changes
+
+### The problem without Reloader
+
+Updating a ConfigMap doesn't restart the pods using it. Kubernetes does update the mounted file inside the container (~60 seconds via kubelet sync), but **Falco reads its rules once at process startup** — it has no file-watcher on `/etc/falco/rules.d/`. So the new YAML sits on disk, correct and updated, but the running Falco process still evaluates the old rule set until something restarts it.
+
+| Step | Automatic? |
+|------|-----------|
+| `kubectl apply` → ConfigMap updated in cluster | ✅ yes |
+| Updated file appears inside pod's mounted volume | ✅ yes (~60s) |
+| Falco process re-reads and applies the new rule | ❌ **no** — needs a pod restart |
+
+**Reloader closes this gap.**
+
+### What Reloader does
+
+Reloader is a Kubernetes controller that watches ConfigMaps and Secrets. When it detects a content change, it triggers a rolling restart of any workload (DaemonSet, Deployment, StatefulSet) that uses the changed resource. It does this by updating a hash annotation on the pod template, which Kubernetes treats as a spec change and initiates a rollout.
+
+### How Reloader is installed
+
+Reloader is installed via ArgoCD as part of the platform baseline, just like Falco:
+
+```
+manifests/platform_baseline/templates/
+├── falco.yaml       ← Falco ArgoCD Application
+└── reloader.yaml    ← Reloader ArgoCD Application
+```
+
+It runs in the `kube-system` namespace and watches all namespaces.
+
+### Two annotation styles — same result
+
+Reloader supports two ways to declare "what should restart when what changes." Both achieve the same outcome — they just declare the relationship from different sides.
+
+#### Style 1: Workload-side (what we use)
+
+```yaml
+# On the Falco DaemonSet (via Helm podAnnotations)
+podAnnotations:
+  reloader.stakater.com/auto: "true"
+```
+
+This tells Reloader: *"Watch every ConfigMap and Secret that this DaemonSet references in its pod spec. If any of them changes, restart me."*
+
+Reloader inspects the pod spec, finds `volumes[].configMap.name: falco-custom-rules`, and watches that exact ConfigMap.
+
+#### Style 2: Source-side (alternative)
+
+```yaml
+# On the ConfigMap itself
+metadata:
+  annotations:
+    reloader.stakater.com/match: "true"
+```
+
+This tells Reloader: *"I'm a ConfigMap that matters. Find every workload that mounts me and restart them when I change."*
+
+Reloader scans all workloads, checks their `volumes[].configMap.name` and `envFrom[].configMapRef.name` fields, and restarts only the ones that reference this exact ConfigMap by name.
+
+#### Both styles compared
+
+| | Workload-side (`auto`) | Source-side (`match`) |
+|---|---|---|
+| Annotation on | DaemonSet / Deployment | ConfigMap / Secret |
+| Declares | "Restart me if my config changes" | "Restart whoever uses me" |
+| Matching logic | Exact name from pod spec volumes/env | Exact name from pod spec volumes/env |
+| Our setup | ✅ Used on Falco DaemonSet | Available as alternative |
+
+### Blast radius — why this is safe
+
+Reloader's matching is **always exact name equality** against a specific ConfigMap/Secret object. There is no wildcard, fuzzy match, or label-selector-based fanout.
+
+```
+Reloader sees: falco-custom-rules ConfigMap changed
+         │
+         ▼
+Scans all workloads in the namespace
+         │
+         ▼
+Checks each pod spec:
+  volumes[].configMap.name == "falco-custom-rules"  ?
+  envFrom[].configMapRef.name == "falco-custom-rules"  ?
+         │
+         ▼
+Only restarts workloads with an exact name match
+```
+
+**The blast radius is only ever the set of workloads that already, explicitly reference that exact ConfigMap by name in their volume/env config.** This is also exactly the set of workloads that *should* restart — they're the ones consuming stale data otherwise.
+
+For example, if you have:
+- `pod-a` mounts `falco-custom-rules` → **restarted** ✅
+- `pod-b` mounts `some-other-config` → **not touched** ✅
+- `pod-c` mounts nothing → **not touched** ✅
+
+No accidental restarts. No collateral damage.
+
+### The complete auto-reload chain
+
+```mermaid
+flowchart LR
+    A["You run\nkubectl apply -f\nmanifests/falco/"] --> B["ConfigMap updated\nin falco namespace"]
+    B --> C["Reloader detects\ncontent hash changed"]
+    C --> D["Reloader updates\nhash annotation on\nFalco pod template"]
+    D --> E["Kubernetes triggers\nrolling restart of\nFalco DaemonSet"]
+    E --> F["New Falco pods\nload updated rules ✅"]
+```
+
+**Zero manual steps. Just `kubectl apply` and walk away.**
+
+---
+
+## Part 5 — Day-2 Operations
 
 ### View alerts in the Web UI
 
@@ -259,6 +370,8 @@ Then apply:
 kubectl apply -f manifests/falco/
 ```
 
+Reloader auto-restarts Falco. No manual restart needed.
+
 Each key in the ConfigMap becomes a separate file in `/etc/falco/rules.d/`:
 
 ```
@@ -275,6 +388,8 @@ Edit the rule in `manifests/falco/falco-custom-rules.yaml`, then:
 kubectl apply -f manifests/falco/
 ```
 
+Reloader detects the content change and restarts Falco automatically.
+
 ### Delete custom rules
 
 ```bash
@@ -283,11 +398,13 @@ kubectl delete -f manifests/falco/
 
 Falco continues running with its built-in rules. The `optional: true` mount means no crash.
 
-### Restart Falco pods (if rules don't reload)
+### Force restart Falco (if needed)
 
 ```bash
 kubectl rollout restart daemonset/falco -n falco
 ```
+
+This should rarely be needed with Reloader in place.
 
 ---
 
@@ -295,10 +412,12 @@ kubectl rollout restart daemonset/falco -n falco
 
 | Task | Command |
 |------|---------|
-| Install Falco (one-time) | `helm template platform-baseline manifests/platform_baseline/ \| kubectl apply -f -` |
+| Install Falco + Reloader (one-time) | `helm template platform-baseline manifests/platform_baseline/ \| kubectl apply -f -` |
 | Apply / update rules | `kubectl apply -f manifests/falco/` |
 | Delete rules | `kubectl delete -f manifests/falco/` |
 | View alerts (Web UI) | `kubectl port-forward svc/falco-falcosidekick-ui -n falco 2802:2802` |
 | Check Falco logs | `kubectl logs -l app.kubernetes.io/name=falco -n falco` |
-| Restart Falco | `kubectl rollout restart daemonset/falco -n falco` |
-| Check ArgoCD sync | `kubectl get application falco -n argocd` |
+| Check Reloader logs | `kubectl logs -l app.kubernetes.io/name=reloader -n kube-system` |
+| Force restart Falco | `kubectl rollout restart daemonset/falco -n falco` |
+| Check ArgoCD sync | `kubectl get application falco reloader -n argocd` |
+
