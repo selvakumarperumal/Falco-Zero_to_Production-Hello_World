@@ -7,6 +7,8 @@ metadata:
   labels:
     app.kubernetes.io/part-of: platform-baseline
     app.kubernetes.io/component: operations
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io/background
 spec:
   project: {{ .Values.reloader.project }}
   source:

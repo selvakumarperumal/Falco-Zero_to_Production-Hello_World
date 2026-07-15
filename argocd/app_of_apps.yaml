@@ -10,7 +10,7 @@ metadata:
     app.kubernetes.io/part-of: platform-baseline
     app.kubernetes.io/component: root
   finalizers:
-    - resources-finalizer.argocd.argoproj.io
+    - resources-finalizer.argocd.argoproj.io/background
 spec:
   project: default
   source:
@@ -39,6 +39,8 @@ metadata:
   labels:
     app.kubernetes.io/part-of: falco
     app.kubernetes.io/component: custom-rules
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io/background
 spec:
   project: default
   source:

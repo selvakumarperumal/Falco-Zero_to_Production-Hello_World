@@ -7,6 +7,8 @@ metadata:
   labels:
     app.kubernetes.io/part-of: platform-baseline
     app.kubernetes.io/component: security
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io/background
 spec:
   project: {{ .Values.falco.project }}
   source:
