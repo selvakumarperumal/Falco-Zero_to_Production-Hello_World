@@ -1,0 +1,664 @@
+# =============================================================================
+# Kyverno ClusterPolicies — Admission-Time Prevention
+# =============================================================================
+# These policies complement the Falco runtime detection rules. Together they
+# form a defense-in-depth strategy: Kyverno blocks bad configurations at
+# admission time; Falco detects bad behaviors at runtime.
+#
+# Documentation: docs/kyverno-falco-guide.md
+# Companion Falco rules: manifests/falco/falco-kyverno-companion-rules.yaml
+#
+# Apply: kubectl apply -f manifests/kyverno/kyverno-policies.yaml
+# Check: kubectl get clusterpolicies
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Example 1 — Disallow Privileged Containers
+# -----------------------------------------------------------------------------
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-privileged-containers
+  annotations:
+    policies.kyverno.io/title: Disallow Privileged Containers
+    policies.kyverno.io/category: Pod Security Standards (Baseline)
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Privileged containers have full access to the host. This policy
+      ensures that the privileged flag is never set to true.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: deny-privileged
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "Privileged containers are not allowed."
+        pattern:
+          spec:
+            containers:
+              - securityContext:
+                  privileged: "false"
+            =(initContainers):
+              - securityContext:
+                  privileged: "false"
+            =(ephemeralContainers):
+              - securityContext:
+                  privileged: "false"
+
+
+# -----------------------------------------------------------------------------
+# Example 2 — Disallow Host Namespaces
+# -----------------------------------------------------------------------------
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-host-namespaces
+  annotations:
+    policies.kyverno.io/title: Disallow Host Namespaces
+    policies.kyverno.io/category: Pod Security Standards (Baseline)
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Containers must not share the host PID, IPC, or network namespaces.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: deny-host-namespaces
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "Host PID, IPC, and network namespaces are not allowed."
+        pattern:
+          spec:
+            =(hostPID): "false"
+            =(hostIPC): "false"
+            =(hostNetwork): "false"
+
+
+# -----------------------------------------------------------------------------
+# Example 3 — Require Non-Root User
+# -----------------------------------------------------------------------------
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-run-as-non-root
+  annotations:
+    policies.kyverno.io/title: Require runAsNonRoot
+    policies.kyverno.io/category: Pod Security Standards (Restricted)
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Containers must set runAsNonRoot to true to prevent running as UID 0.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: require-non-root
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "Containers must not run as root. Set securityContext.runAsNonRoot to true."
+        pattern:
+          spec:
+            containers:
+              - securityContext:
+                  runAsNonRoot: true
+            =(initContainers):
+              - securityContext:
+                  runAsNonRoot: true
+
+
+# -----------------------------------------------------------------------------
+# Example 4 — Restrict Image Registries
+# -----------------------------------------------------------------------------
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: restrict-image-registries
+  annotations:
+    policies.kyverno.io/title: Restrict Image Registries
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Images may only be pulled from approved registries.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: validate-registries
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: >-
+          Images must come from an approved registry.
+          Allowed: ECR (*.dkr.ecr.*.amazonaws.com), ghcr.io, gcr.io, registry.k8s.io.
+        foreach:
+          - list: "request.object.spec.containers"
+            deny:
+              conditions:
+                all:
+                  - key: "{{ element.image }}"
+                    operator: AnyNotIn
+                    value:
+                      - "*.dkr.ecr.*.amazonaws.com/*"
+                      - "ghcr.io/*"
+                      - "gcr.io/*"
+                      - "registry.k8s.io/*"
+          - list: "request.object.spec.initContainers || []"
+            deny:
+              conditions:
+                all:
+                  - key: "{{ element.image }}"
+                    operator: AnyNotIn
+                    value:
+                      - "*.dkr.ecr.*.amazonaws.com/*"
+                      - "ghcr.io/*"
+                      - "gcr.io/*"
+                      - "registry.k8s.io/*"
+
+
+# -----------------------------------------------------------------------------
+# Example 5 — Disallow Latest Tag
+# -----------------------------------------------------------------------------
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-latest-tag
+  annotations:
+    policies.kyverno.io/title: Disallow Latest Tag
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Using the :latest tag makes deployments non-reproducible. Require
+      explicit version tags.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: require-image-tag
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "An image tag is required and must not be ':latest'."
+        pattern:
+          spec:
+            containers:
+              - image: "!*:latest & *:*"
+            =(initContainers):
+              - image: "!*:latest & *:*"
+
+
+# -----------------------------------------------------------------------------
+# Example 6 — Require Resource Limits
+# -----------------------------------------------------------------------------
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-resource-limits
+  annotations:
+    policies.kyverno.io/title: Require Resource Limits
+    policies.kyverno.io/category: Best Practices
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      All containers must define CPU and memory limits to prevent resource
+      exhaustion on shared nodes.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: check-resource-limits
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "CPU and memory limits are required for all containers."
+        pattern:
+          spec:
+            containers:
+              - resources:
+                  limits:
+                    cpu: "?*"
+                    memory: "?*"
+
+
+# -----------------------------------------------------------------------------
+# Example 7 — Require Read-Only Root Filesystem
+# -----------------------------------------------------------------------------
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-readonly-rootfs
+  annotations:
+    policies.kyverno.io/title: Require Read-Only Root Filesystem
+    policies.kyverno.io/category: Pod Security Standards (Restricted)
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Containers must use a read-only root filesystem. Any writable
+      paths should be explicitly defined as volume mounts.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationFailureAction: Audit
+  rules:
+    - name: require-readonly-rootfs
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "Root filesystem must be read-only. Set securityContext.readOnlyRootFilesystem to true."
+        pattern:
+          spec:
+            containers:
+              - securityContext:
+                  readOnlyRootFilesystem: true
+
+
+# -----------------------------------------------------------------------------
+# Example 8 — Drop All Capabilities
+# -----------------------------------------------------------------------------
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: drop-all-capabilities
+  annotations:
+    policies.kyverno.io/title: Drop All Capabilities
+    policies.kyverno.io/category: Pod Security Standards (Restricted)
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Containers must drop ALL Linux capabilities. Only explicitly needed
+      capabilities should be added back.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: require-drop-all
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "Containers must drop ALL capabilities."
+        foreach:
+          - list: "request.object.spec.containers"
+            deny:
+              conditions:
+                all:
+                  - key: ALL
+                    operator: AnyNotIn
+                    value: "{{ element.securityContext.capabilities.drop || `[]` }}"
+
+
+# -----------------------------------------------------------------------------
+# Example 9 — Disallow Privilege Escalation
+# -----------------------------------------------------------------------------
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-privilege-escalation
+  annotations:
+    policies.kyverno.io/title: Disallow Privilege Escalation
+    policies.kyverno.io/category: Pod Security Standards (Restricted)
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Containers must not allow privilege escalation via setuid/setgid binaries.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: deny-privilege-escalation
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "Privilege escalation is not allowed. Set allowPrivilegeEscalation to false."
+        pattern:
+          spec:
+            containers:
+              - securityContext:
+                  allowPrivilegeEscalation: false
+            =(initContainers):
+              - securityContext:
+                  allowPrivilegeEscalation: false
+
+
+# -----------------------------------------------------------------------------
+# Example 10 — Disallow HostPath Volumes
+# -----------------------------------------------------------------------------
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-hostpath-volumes
+  annotations:
+    policies.kyverno.io/title: Disallow HostPath Volumes
+    policies.kyverno.io/category: Pod Security Standards (Baseline)
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      HostPath volumes give containers direct access to the node filesystem.
+      This policy blocks all hostPath volume mounts.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: deny-hostpath
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "HostPath volumes are not allowed."
+        pattern:
+          spec:
+            =(volumes):
+              - X(hostPath): "null"
+
+
+# -----------------------------------------------------------------------------
+# Example 11 — Block Default Service Account Token
+# -----------------------------------------------------------------------------
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-default-sa-token
+  annotations:
+    policies.kyverno.io/title: Disallow Default Service Account Token
+    policies.kyverno.io/category: Security Best Practices
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Pods using the default service account must not automount the
+      service account token unless explicitly needed.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationFailureAction: Audit
+  rules:
+    - name: deny-default-sa-token
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      preconditions:
+        all:
+          - key: "{{ request.object.spec.serviceAccountName || 'default' }}"
+            operator: Equals
+            value: "default"
+      validate:
+        message: >-
+          Pods using the default service account must set
+          automountServiceAccountToken to false.
+        pattern:
+          spec:
+            automountServiceAccountToken: false
+
+
+# -----------------------------------------------------------------------------
+# Example 12 — Disallow NodePort Services
+# -----------------------------------------------------------------------------
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-nodeport-services
+  annotations:
+    policies.kyverno.io/title: Disallow NodePort Services
+    policies.kyverno.io/category: Network Security
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      NodePort services expose ports on every cluster node. Use LoadBalancer
+      or Ingress instead for controlled external access.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: deny-nodeport
+      match:
+        any:
+          - resources:
+              kinds:
+                - Service
+      validate:
+        message: "NodePort services are not allowed. Use LoadBalancer or Ingress."
+        pattern:
+          spec:
+            type: "!NodePort"
+
+
+# -----------------------------------------------------------------------------
+# Example 13 — Require Health Probes
+# -----------------------------------------------------------------------------
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-pod-probes
+  annotations:
+    policies.kyverno.io/title: Require Pod Probes
+    policies.kyverno.io/category: Best Practices
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      All containers must define liveness and readiness probes to ensure
+      Kubernetes can detect and recover from unhealthy states.
+    pod-policies.kyverno.io/autogen-controllers: DaemonSet,Deployment,StatefulSet
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationFailureAction: Audit
+  rules:
+    - name: validate-probes
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "Liveness and readiness probes are required for all containers."
+        pattern:
+          spec:
+            containers:
+              - livenessProbe: "?*"
+                readinessProbe: "?*"
+
+
+# -----------------------------------------------------------------------------
+# Example 14 — Require Standard Labels
+# -----------------------------------------------------------------------------
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-labels
+  annotations:
+    policies.kyverno.io/title: Require Standard Labels
+    policies.kyverno.io/category: Best Practices
+    policies.kyverno.io/severity: low
+    policies.kyverno.io/description: >-
+      All Pods must have the app.kubernetes.io/name label.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationFailureAction: Audit
+  rules:
+    - name: require-app-label
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "The label 'app.kubernetes.io/name' is required."
+        pattern:
+          metadata:
+            labels:
+              app.kubernetes.io/name: "?*"
+
+
+# -----------------------------------------------------------------------------
+# Example 15 — Generate Default-Deny Network Policy
+# -----------------------------------------------------------------------------
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: generate-default-deny-netpol
+  annotations:
+    policies.kyverno.io/title: Generate Default-Deny Network Policy
+    policies.kyverno.io/category: Network Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Automatically creates a default-deny NetworkPolicy in every new
+      namespace to enforce zero-trust networking.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  rules:
+    - name: generate-default-deny
+      match:
+        any:
+          - resources:
+              kinds:
+                - Namespace
+      exclude:
+        any:
+          - resources:
+              namespaces:
+                - kube-system
+                - kube-public
+                - kube-node-lease
+                - kyverno
+                - argocd
+                - falco
+      generate:
+        kind: NetworkPolicy
+        apiVersion: networking.k8s.io/v1
+        name: default-deny-all
+        namespace: "{{request.object.metadata.name}}"
+        synchronize: true
+        data:
+          spec:
+            podSelector: {}
+            policyTypes:
+              - Ingress
+              - Egress
+
+
+# -----------------------------------------------------------------------------
+# Example 16 — Mutate Image Pull Policy
+# -----------------------------------------------------------------------------
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: mutate-image-pull-policy
+  annotations:
+    policies.kyverno.io/title: Set Image Pull Policy to Always for Latest
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: low
+    policies.kyverno.io/description: >-
+      Automatically sets imagePullPolicy to Always for containers using
+      the :latest tag.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  rules:
+    - name: set-pull-always
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      mutate:
+        patchStrategicMerge:
+          spec:
+            containers:
+              - (image): "*:latest"
+                imagePullPolicy: "Always"
+            =(initContainers):
+              - (image): "*:latest"
+                imagePullPolicy: "Always"
+
+
+# -----------------------------------------------------------------------------
+# Example 17 — Add PSS Labels to Namespaces
+# -----------------------------------------------------------------------------
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: add-pss-labels
+  annotations:
+    policies.kyverno.io/title: Add Pod Security Standards Labels
+    policies.kyverno.io/category: Pod Security Standards
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Automatically adds Pod Security Standard labels to new namespaces
+      to enforce baseline security at the namespace level.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  rules:
+    - name: add-pss-baseline
+      match:
+        any:
+          - resources:
+              kinds:
+                - Namespace
+      exclude:
+        any:
+          - resources:
+              namespaces:
+                - kube-system
+                - kube-public
+                - kube-node-lease
+      mutate:
+        patchStrategicMerge:
+          metadata:
+            labels:
+              pod-security.kubernetes.io/enforce: "baseline"
+              pod-security.kubernetes.io/enforce-version: "latest"
+              pod-security.kubernetes.io/warn: "restricted"
+              pod-security.kubernetes.io/warn-version: "latest"

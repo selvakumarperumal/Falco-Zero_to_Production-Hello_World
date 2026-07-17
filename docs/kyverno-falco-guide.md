@@ -1,0 +1,1513 @@
+# Kyverno + Falco — Defense in Depth for Kubernetes
+
+> **Who is this for?** Teams running Falco for runtime detection who want to add Kyverno for admission-time prevention. Every example is explained in plain English with deployable YAML.
+
+---
+
+## 1. Why Two Tools?
+
+Kubernetes security has two fundamentally different problems:
+
+| Problem | When it happens | Tool |
+|---|---|---|
+| **Bad configuration deployed** | At admission time (someone runs `kubectl apply`) | **Kyverno** — blocks it before it runs |
+| **Bad behavior at runtime** | After the pod is already running | **Falco** — detects it and alerts |
+
+Neither tool alone covers both. A privileged container can be blocked by Kyverno at admission, but if an attacker exploits a vulnerability inside an *allowed* container and spawns a shell, only Falco can catch that.
+
+> **Analogy:** Kyverno is the bouncer at the door (checks your ID before you enter). Falco is the security camera inside (watches what you do after you're in). You need both.
+
+### What is Kyverno?
+
+Kyverno is a **Kubernetes-native policy engine** that works as an admission controller. When anyone creates, updates, or deletes a Kubernetes resource, the API server sends the request to Kyverno first. Kyverno evaluates the request against your policies and can:
+
+- **Validate** — reject requests that violate policy (e.g., block privileged containers)
+- **Mutate** — automatically modify requests to comply (e.g., add security labels)
+- **Generate** — create companion resources automatically (e.g., a NetworkPolicy for every new namespace)
+
+Policies are written in **standard YAML** — no special language to learn.
+
+### What is Falco? (Recap)
+
+Falco is a **runtime security engine** that hooks into the Linux kernel via eBPF. It watches every syscall and fires alerts when suspicious activity matches your rules. Covered in detail in the [Falco Conditions Tutorial](../falco-conditions-tutorial.md) and the [Falco Setup Guide](./falco-setup-guide.md).
+
+---
+
+## 2. Architecture — Where Each Tool Sits
+
+```mermaid
+flowchart TB
+    subgraph ADMISSION ["Admission Time (Kyverno)"]
+        A["Developer runs\nkubectl apply"] --> B["Kubernetes\nAPI Server"]
+        B --> C{"Kyverno\nAdmission\nController"}
+        C -->|"Policy violated"| D["❌ Request REJECTED\nPod never created"]
+        C -->|"Policy passed\n(or mutated)"| E["✅ Resource created\nin cluster"]
+    end
+
+    subgraph RUNTIME ["Runtime (Falco)"]
+        E --> F["Pod running\non node"]
+        F --> G["Falco eBPF probe\nwatching syscalls"]
+        G --> H{"Rule\nmatch?"}
+        H -->|"yes"| I["🚨 Alert →\nFalcosidekick → UI"]
+        H -->|"no"| J["No action"]
+    end
+
+    style ADMISSION fill:#1a1a2e,stroke:#e94560,color:#fff
+    style RUNTIME fill:#1a1a2e,stroke:#0f3460,color:#fff
+```
+
+**Key insight:** There is a gap between what admission policies can prevent and what actually happens at runtime. Kyverno blocks known-bad configurations. Falco catches unknown-bad behaviors.
+
+---
+
+## 3. Installing Kyverno via ArgoCD
+
+Following the same pattern used for Falco in this project (see [falco.yaml](../manifests/platform_baseline/templates/falco.yaml)), Kyverno is installed as an ArgoCD Application:
+
+```yaml
+# manifests/platform_baseline/templates/kyverno.yaml
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kyverno
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: platform-baseline
+    app.kubernetes.io/component: policy-engine
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io/background
+spec:
+  project: default
+  source:
+    repoURL: https://kyverno.github.io/kyverno/
+    chart: kyverno
+    targetRevision: "3.3.4"
+    helm:
+      values: |
+        replicaCount: 3
+        admissionController:
+          replicas: 3
+        backgroundController:
+          replicas: 2
+        cleanupController:
+          replicas: 2
+        reportsController:
+          replicas: 2
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kyverno
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+```
+
+**Apply it the same way as Falco:**
+```bash
+helm template platform-baseline manifests/platform_baseline/ | kubectl apply -f -
+```
+
+ArgoCD handles the rest — installs Kyverno, creates the namespace, and keeps it synced.
+
+> **Why `ServerSideApply=true`?** Kyverno creates webhook configurations that can conflict with ArgoCD's default client-side apply. Server-side apply handles these metadata fields cleanly.
+
+---
+
+## 4. The Defense-in-Depth Map
+
+This table maps every security concern to its prevention policy (Kyverno) and detection rule (Falco). Some threats can only be prevented, some can only be detected, and the best ones have both layers.
+
+| # | Security Concern | Kyverno (Prevention) | Falco (Detection) | Coverage |
+|---|---|---|---|---|
+| 1 | Privileged containers | Block `privileged: true` | Detect privileged container started | Both |
+| 2 | Host namespaces | Block `hostPID/hostNetwork/hostIPC` | Detect host namespace usage | Both |
+| 3 | Root user in container | Require `runAsNonRoot: true` | Detect process as root in container | Both |
+| 4 | Untrusted image registry | Restrict to approved registries | Detect container from unknown registry | Both |
+| 5 | Floating image tags | Block `:latest` tag | Detect container running `:latest` | Both |
+| 6 | No resource limits | Require CPU/memory limits | Detect resource exhaustion behavior | Both |
+| 7 | Writable root filesystem | Require `readOnlyRootFilesystem` | Detect write to container root fs | Both |
+| 8 | Dangerous capabilities | Drop `ALL` capabilities | Detect capability usage at runtime | Both |
+| 9 | Privilege escalation | Block `allowPrivilegeEscalation` | Detect setuid/setgid execution | Both |
+| 10 | HostPath mounts | Block hostPath volumes | Detect sensitive host path access | Both |
+| 11 | Service account tokens | Block automount on default SA | Detect SA token file access | Both |
+| 12 | NodePort exposure | Block NodePort services | Detect unexpected listening port | Both |
+| 13 | Missing health probes | Require liveness/readiness probes | Detect CrashLoopBackOff pattern | Both |
+| 14 | Missing labels | Require `app.kubernetes.io/name` | — | Prevention only |
+| 15 | Network segmentation | Generate default-deny NetworkPolicy | Detect unexpected outbound connection | Both |
+| 16 | Image pull policy | Mutate to `Always` for `:latest` | — | Prevention only |
+| 17 | PSS namespace labels | Add PSS labels to namespaces | — | Prevention only |
+| 18 | Shell in container | — | Detect interactive shell spawned | Detection only |
+| 19 | Crypto mining | — | Detect mining process/connection | Detection only |
+| 20 | Sensitive file access | — | Detect `/etc/shadow`, key file reads | Detection only |
+| 21 | Log tampering | — | Detect log file deletion | Detection only |
+| 22 | Symlink attacks | — | Detect symlink-based path traversal | Detection only |
+| 23 | Reverse shell | — | Detect reverse shell connection | Detection only |
+
+---
+
+## 5. The Examples — Kyverno + Falco Side by Side
+
+Each example shows the Kyverno policy that **prevents** a misconfiguration and the Falco rule that **detects** the same threat at runtime. For runtime-only threats (no admission-time equivalent), only the Falco rule is shown.
+
+All policies and rules below are also available as deployable manifests:
+- Kyverno: [`manifests/kyverno/kyverno-policies.yaml`](../manifests/kyverno/kyverno-policies.yaml)
+- Falco: [`manifests/falco/falco-kyverno-companion-rules.yaml`](../manifests/falco/falco-kyverno-companion-rules.yaml)
+
+---
+
+### Example 1 — Disallow Privileged Containers
+
+**Why it matters:** A privileged container has full access to the host kernel — it can load kernel modules, access all devices, and escape containment entirely. This is the single most dangerous container configuration.
+
+#### Kyverno Policy (Prevention)
+
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-privileged-containers
+  annotations:
+    policies.kyverno.io/title: Disallow Privileged Containers
+    policies.kyverno.io/category: Pod Security Standards (Baseline)
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Privileged containers have full access to the host. This policy
+      ensures that the `privileged` flag is never set to `true`.
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: deny-privileged
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "Privileged containers are not allowed."
+        pattern:
+          spec:
+            containers:
+              - securityContext:
+                  privileged: "false"
+            =(initContainers):
+              - securityContext:
+                  privileged: "false"
+            =(ephemeralContainers):
+              - securityContext:
+                  privileged: "false"
+```
+
+**What this does:** Rejects any Pod that sets `privileged: true` on *any* container — regular, init, or ephemeral. The `=(...)` syntax means "if this field exists, validate it" — it won't fail just because there are no initContainers.
+
+#### Falco Rule (Detection)
+
+```yaml
+- rule: Privileged Container Started
+  desc: >
+    Detects a container that was started with privileged mode.
+    This should never happen if Kyverno is enforcing, so this alert
+    means either Kyverno was bypassed or is in Audit mode.
+  condition: >
+    container_started and container and container.privileged = true
+  output: >
+    Privileged container started (user=%user.name pod=%k8s.pod.name
+    ns=%k8s.ns.name image=%container.image.repository)
+  priority: CRITICAL
+  tags: [kyverno_companion, privileged, mitre_privilege_escalation]
+```
+
+**Defense in depth:** If Kyverno is in `Enforce` mode, this Falco rule should *never* fire. If it does, it means something bypassed admission control (e.g., a controller creating pods directly, or Kyverno was down).
+
+---
+
+### Example 2 — Disallow Host Namespaces
+
+**Why it matters:** `hostPID`, `hostIPC`, and `hostNetwork` break container isolation. A container with `hostPID` can see and signal *all* processes on the node. `hostNetwork` bypasses network policies entirely.
+
+#### Kyverno Policy (Prevention)
+
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-host-namespaces
+  annotations:
+    policies.kyverno.io/title: Disallow Host Namespaces
+    policies.kyverno.io/category: Pod Security Standards (Baseline)
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Containers must not share the host's PID, IPC, or network namespaces.
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: deny-host-namespaces
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "Host PID, IPC, and network namespaces are not allowed."
+        pattern:
+          spec:
+            =(hostPID): "false"
+            =(hostIPC): "false"
+            =(hostNetwork): "false"
+```
+
+#### Falco Rule (Detection)
+
+```yaml
+- rule: Container Using Host Namespace
+  desc: >
+    Detects a container running with host PID or network namespace.
+  condition: >
+    container_started and container
+    and (container.privileged = true or k8s.pod.name != "")
+    and (evt.arg.flags contains "CLONE_NEWPID" or evt.arg.flags contains "CLONE_NEWNET")
+  output: >
+    Container uses host namespace (pod=%k8s.pod.name ns=%k8s.ns.name
+    image=%container.image.repository)
+  priority: CRITICAL
+  tags: [kyverno_companion, host_namespace, mitre_privilege_escalation]
+```
+
+---
+
+### Example 3 — Require Non-Root User
+
+**Why it matters:** Running as root inside a container means any container escape gives root on the host. Running as non-root limits the blast radius of a compromise.
+
+#### Kyverno Policy (Prevention)
+
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-run-as-non-root
+  annotations:
+    policies.kyverno.io/title: Require runAsNonRoot
+    policies.kyverno.io/category: Pod Security Standards (Restricted)
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Containers must set runAsNonRoot to true to prevent running as UID 0.
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: require-non-root
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "Containers must not run as root. Set spec.containers[*].securityContext.runAsNonRoot to true."
+        pattern:
+          spec:
+            containers:
+              - securityContext:
+                  runAsNonRoot: true
+            =(initContainers):
+              - securityContext:
+                  runAsNonRoot: true
+```
+
+#### Falco Rule (Detection)
+
+```yaml
+- rule: Container Running as Root User
+  desc: >
+    Detects a process running as root (UID 0) inside a container.
+  condition: >
+    spawned_process and container
+    and user.uid = 0
+    and not k8s.ns.name in (kube-system, kyverno)
+  output: >
+    Process running as root in container (user=%user.name uid=%user.uid
+    command=%proc.cmdline pod=%k8s.pod.name ns=%k8s.ns.name)
+  priority: WARNING
+  tags: [kyverno_companion, root_user, mitre_privilege_escalation]
+```
+
+---
+
+### Example 4 — Restrict Image Registries
+
+**Why it matters:** Pulling images from untrusted registries is a supply chain attack vector. An attacker could publish a malicious image with the same name as a legitimate one on Docker Hub.
+
+#### Kyverno Policy (Prevention)
+
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: restrict-image-registries
+  annotations:
+    policies.kyverno.io/title: Restrict Image Registries
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Images may only be pulled from approved registries. Update the allowed
+      registry list to match your organization's approved sources.
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: validate-registries
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: >-
+          Images must come from an approved registry.
+          Allowed: ECR (*.dkr.ecr.*.amazonaws.com), ghcr.io, gcr.io.
+        foreach:
+          - list: "request.object.spec.containers"
+            deny:
+              conditions:
+                all:
+                  - key: "{{ element.image }}"
+                    operator: AnyNotIn
+                    value:
+                      - "*.dkr.ecr.*.amazonaws.com/*"
+                      - "ghcr.io/*"
+                      - "gcr.io/*"
+                      - "registry.k8s.io/*"
+          - list: "request.object.spec.initContainers || []"
+            deny:
+              conditions:
+                all:
+                  - key: "{{ element.image }}"
+                    operator: AnyNotIn
+                    value:
+                      - "*.dkr.ecr.*.amazonaws.com/*"
+                      - "ghcr.io/*"
+                      - "gcr.io/*"
+                      - "registry.k8s.io/*"
+```
+
+#### Falco Rule (Detection)
+
+```yaml
+- list: approved_registries
+  items:
+    - dkr.ecr
+    - ghcr.io
+    - gcr.io
+    - registry.k8s.io
+
+- rule: Container from Untrusted Registry
+  desc: >
+    Detects a running container whose image was pulled from a registry
+    not in the approved list.
+  condition: >
+    container_started and container
+    and not container.image.repository contains "dkr.ecr"
+    and not container.image.repository contains "ghcr.io"
+    and not container.image.repository contains "gcr.io"
+    and not container.image.repository contains "registry.k8s.io"
+  output: >
+    Container from untrusted registry (image=%container.image.repository:%container.image.tag
+    pod=%k8s.pod.name ns=%k8s.ns.name)
+  priority: ERROR
+  tags: [kyverno_companion, supply_chain, mitre_initial_access]
+```
+
+---
+
+### Example 5 — Disallow Latest Tag
+
+**Why it matters:** The `:latest` tag is mutable — it points to different images over time. You can't reproduce a deployment, audit what's running, or guarantee the image hasn't been replaced with something malicious.
+
+#### Kyverno Policy (Prevention)
+
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-latest-tag
+  annotations:
+    policies.kyverno.io/title: Disallow Latest Tag
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Using the :latest tag makes deployments non-reproducible and hides
+      what version is actually running. Require explicit version tags.
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: require-image-tag
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "An image tag is required and must not be ':latest'."
+        pattern:
+          spec:
+            containers:
+              - image: "!*:latest & *:*"
+            =(initContainers):
+              - image: "!*:latest & *:*"
+```
+
+**What the pattern `"!*:latest & *:*"` means:**
+- `*:*` — must have a tag (the `:` separator must exist)
+- `!*:latest` — the tag must NOT be `latest`
+
+#### Falco Rule (Detection)
+
+```yaml
+- rule: Container Running with Latest Tag
+  desc: >
+    Detects a running container using the :latest image tag.
+  condition: >
+    container_started and container
+    and (container.image.tag = "latest" or container.image.tag = "")
+  output: >
+    Container running with :latest tag (image=%container.image.repository:%container.image.tag
+    pod=%k8s.pod.name ns=%k8s.ns.name)
+  priority: NOTICE
+  tags: [kyverno_companion, latest_tag, supply_chain]
+```
+
+---
+
+### Example 6 — Require Resource Limits
+
+**Why it matters:** A container without resource limits can consume all CPU and memory on a node, causing a denial-of-service for every other workload on that node.
+
+#### Kyverno Policy (Prevention)
+
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-resource-limits
+  annotations:
+    policies.kyverno.io/title: Require Resource Limits
+    policies.kyverno.io/category: Best Practices
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      All containers must define CPU and memory limits to prevent resource
+      exhaustion on shared nodes.
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: check-resource-limits
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "CPU and memory limits are required for all containers."
+        pattern:
+          spec:
+            containers:
+              - resources:
+                  limits:
+                    cpu: "?*"
+                    memory: "?*"
+```
+
+**What `"?*"` means:** "Any non-empty value" — at least one character is required. This ensures the field exists and has a value, without constraining *what* the value is.
+
+#### Falco Rule (Detection)
+
+```yaml
+- rule: Container Resource Exhaustion Behavior
+  desc: >
+    Detects a container process consuming excessive resources, potentially
+    indicating a fork bomb or resource exhaustion attack.
+  condition: >
+    spawned_process and container
+    and proc.name in (stress, stress-ng, yes, dd)
+    and not k8s.ns.name in (kube-system)
+  output: >
+    Resource exhaustion tool detected (command=%proc.cmdline pod=%k8s.pod.name
+    ns=%k8s.ns.name image=%container.image.repository)
+  priority: WARNING
+  tags: [kyverno_companion, resource_abuse, mitre_impact]
+```
+
+---
+
+### Example 7 — Require Read-Only Root Filesystem
+
+**Why it matters:** A writable root filesystem lets attackers drop binaries, modify configs, or install backdoors inside the container. Making it read-only forces all writes to explicitly mounted volumes.
+
+#### Kyverno Policy (Prevention)
+
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-readonly-rootfs
+  annotations:
+    policies.kyverno.io/title: Require Read-Only Root Filesystem
+    policies.kyverno.io/category: Pod Security Standards (Restricted)
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Containers must use a read-only root filesystem. Any writable
+      paths should be explicitly defined as volume mounts.
+spec:
+  validationFailureAction: Audit
+  rules:
+    - name: require-readonly-rootfs
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "Root filesystem must be read-only. Set securityContext.readOnlyRootFilesystem to true."
+        pattern:
+          spec:
+            containers:
+              - securityContext:
+                  readOnlyRootFilesystem: true
+```
+
+> **Note:** This starts in `Audit` mode because many applications write to temp directories. Migrate to `Enforce` after adding `emptyDir` volumes for `/tmp` in your deployments.
+
+#### Falco Rule (Detection)
+
+```yaml
+- rule: Write to Container Root Filesystem
+  desc: >
+    Detects file writes to the container root filesystem, excluding
+    known-safe paths like /tmp and /proc.
+  condition: >
+    evt.type in (open, openat, openat2) and evt.dir = <
+    and container
+    and evt.is_open_write = true
+    and not fd.name startswith "/tmp"
+    and not fd.name startswith "/proc"
+    and not fd.name startswith "/dev"
+    and not fd.name startswith "/sys"
+    and fd.name != ""
+    and not k8s.ns.name in (kube-system, kyverno)
+  output: >
+    File written to container root fs (file=%fd.name command=%proc.cmdline
+    pod=%k8s.pod.name ns=%k8s.ns.name)
+  priority: WARNING
+  tags: [kyverno_companion, rootfs_write, mitre_persistence]
+```
+
+---
+
+### Example 8 — Drop All Capabilities
+
+**Why it matters:** Linux capabilities grant specific superuser powers. By default, containers get a dangerous set. Best practice is to drop ALL and add back only what's needed.
+
+#### Kyverno Policy (Prevention)
+
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: drop-all-capabilities
+  annotations:
+    policies.kyverno.io/title: Drop All Capabilities
+    policies.kyverno.io/category: Pod Security Standards (Restricted)
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Containers must drop ALL Linux capabilities. Only explicitly needed
+      capabilities should be added back (e.g., NET_BIND_SERVICE).
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: require-drop-all
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "Containers must drop ALL capabilities."
+        foreach:
+          - list: "request.object.spec.containers"
+            deny:
+              conditions:
+                all:
+                  - key: ALL
+                    operator: AnyNotIn
+                    value: "{{ element.securityContext.capabilities.drop || `[]` }}"
+```
+
+#### Falco Rule (Detection)
+
+```yaml
+- rule: Dangerous Capability Used at Runtime
+  desc: >
+    Detects a process attempting to use dangerous Linux capabilities
+    such as SYS_ADMIN, SYS_PTRACE, or NET_RAW.
+  condition: >
+    spawned_process and container
+    and (proc.name = "nsenter" or proc.name = "unshare"
+      or proc.cmdline contains "capsh"
+      or proc.cmdline contains "--cap-add")
+  output: >
+    Dangerous capability usage detected (command=%proc.cmdline user=%user.name
+    pod=%k8s.pod.name ns=%k8s.ns.name)
+  priority: WARNING
+  tags: [kyverno_companion, capabilities, mitre_privilege_escalation]
+```
+
+---
+
+### Example 9 — Disallow Privilege Escalation
+
+**Why it matters:** `allowPrivilegeEscalation: true` allows a process to gain more privileges than its parent via setuid/setgid binaries. This is the mechanism behind `sudo`, `su`, and many container escape techniques.
+
+#### Kyverno Policy (Prevention)
+
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-privilege-escalation
+  annotations:
+    policies.kyverno.io/title: Disallow Privilege Escalation
+    policies.kyverno.io/category: Pod Security Standards (Restricted)
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Containers must not allow privilege escalation via setuid/setgid binaries.
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: deny-privilege-escalation
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "Privilege escalation is not allowed. Set allowPrivilegeEscalation to false."
+        pattern:
+          spec:
+            containers:
+              - securityContext:
+                  allowPrivilegeEscalation: false
+            =(initContainers):
+              - securityContext:
+                  allowPrivilegeEscalation: false
+```
+
+#### Falco Rule (Detection)
+
+```yaml
+- rule: Setuid or Setgid Binary Executed in Container
+  desc: >
+    Detects execution of setuid/setgid binaries inside a container,
+    which can be used for privilege escalation.
+  condition: >
+    spawned_process and container
+    and (proc.name in (sudo, su, newgrp, chsh, chfn, passwd)
+      or proc.name = "pkexec")
+    and not k8s.ns.name in (kube-system)
+  output: >
+    Setuid/setgid binary executed (command=%proc.cmdline user=%user.name
+    pod=%k8s.pod.name ns=%k8s.ns.name image=%container.image.repository)
+  priority: ERROR
+  tags: [kyverno_companion, privilege_escalation, mitre_privilege_escalation]
+```
+
+---
+
+### Example 10 — Disallow HostPath Volumes
+
+**Why it matters:** HostPath mounts give a container direct access to the node's filesystem. An attacker can read SSH keys, Docker sockets, or even overwrite system binaries.
+
+#### Kyverno Policy (Prevention)
+
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-hostpath-volumes
+  annotations:
+    policies.kyverno.io/title: Disallow HostPath Volumes
+    policies.kyverno.io/category: Pod Security Standards (Baseline)
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      HostPath volumes give containers direct access to the node filesystem.
+      This policy blocks all hostPath volume mounts.
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: deny-hostpath
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "HostPath volumes are not allowed."
+        pattern:
+          spec:
+            =(volumes):
+              - X(hostPath): "null"
+```
+
+**What `X(hostPath): "null"` means:** The `X()` operator (Kyverno's "must not exist" check) ensures the `hostPath` field is absent from every volume definition.
+
+#### Falco Rule (Detection)
+
+```yaml
+- list: sensitive_host_paths
+  items:
+    - /etc/shadow
+    - /etc/kubernetes
+    - /var/run/docker.sock
+    - /var/run/containerd
+    - /root/.ssh
+    - /root/.kube
+    - /home
+
+- rule: Sensitive Host Path Accessed from Container
+  desc: >
+    Detects a container accessing sensitive paths on the host filesystem
+    via a hostPath mount.
+  condition: >
+    evt.type in (open, openat, openat2) and evt.dir = <
+    and container
+    and (fd.name startswith "/etc/shadow"
+      or fd.name startswith "/etc/kubernetes"
+      or fd.name startswith "/var/run/docker.sock"
+      or fd.name startswith "/root/.ssh"
+      or fd.name startswith "/root/.kube")
+  output: >
+    Sensitive host path accessed from container (file=%fd.name command=%proc.cmdline
+    pod=%k8s.pod.name ns=%k8s.ns.name)
+  priority: CRITICAL
+  tags: [kyverno_companion, hostpath, mitre_credential_access]
+```
+
+---
+
+### Example 11 — Block Default Service Account Token
+
+**Why it matters:** Every pod gets a mounted service account token by default. If compromised, that token can be used to query the Kubernetes API. Most pods don't need it.
+
+#### Kyverno Policy (Prevention)
+
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-default-sa-token
+  annotations:
+    policies.kyverno.io/title: Disallow Default Service Account Token
+    policies.kyverno.io/category: Security Best Practices
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Pods using the 'default' service account must not automount the
+      service account token unless explicitly needed.
+spec:
+  validationFailureAction: Audit
+  rules:
+    - name: deny-default-sa-token
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      preconditions:
+        all:
+          - key: "{{ request.object.spec.serviceAccountName || 'default' }}"
+            operator: Equals
+            value: "default"
+      validate:
+        message: >-
+          Pods using the default service account must set
+          automountServiceAccountToken to false.
+        pattern:
+          spec:
+            automountServiceAccountToken: false
+```
+
+#### Falco Rule (Detection)
+
+```yaml
+- rule: Service Account Token Accessed in Container
+  desc: >
+    Detects a container process reading the Kubernetes service account
+    token file, which could indicate credential harvesting.
+  condition: >
+    evt.type in (open, openat, openat2) and evt.dir = <
+    and container
+    and fd.name contains "/var/run/secrets/kubernetes.io/serviceaccount"
+    and not k8s.ns.name in (kube-system, kyverno)
+    and not proc.name in (pause, tini)
+  output: >
+    Service account token accessed (file=%fd.name command=%proc.cmdline
+    pod=%k8s.pod.name ns=%k8s.ns.name user=%user.name)
+  priority: WARNING
+  tags: [kyverno_companion, sa_token, mitre_credential_access]
+```
+
+---
+
+### Example 12 — Disallow NodePort Services
+
+**Why it matters:** NodePort services expose a port on *every* node in the cluster, bypassing ingress controllers and load balancers. This creates an uncontrolled attack surface.
+
+#### Kyverno Policy (Prevention)
+
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-nodeport-services
+  annotations:
+    policies.kyverno.io/title: Disallow NodePort Services
+    policies.kyverno.io/category: Network Security
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      NodePort services expose ports on every cluster node. Use LoadBalancer
+      or Ingress instead for controlled external access.
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: deny-nodeport
+      match:
+        any:
+          - resources:
+              kinds:
+                - Service
+      validate:
+        message: "NodePort services are not allowed. Use LoadBalancer or Ingress."
+        pattern:
+          spec:
+            type: "!NodePort"
+```
+
+#### Falco Rule (Detection)
+
+```yaml
+- rule: Unexpected Listening Port in Container
+  desc: >
+    Detects a container process binding to a port outside the expected
+    application range (common for backdoors and reverse shells).
+  condition: >
+    evt.type in (bind, listen) and evt.dir = <
+    and container
+    and fd.sport != 0
+    and not fd.sport in (80, 443, 8080, 8443, 3000, 5000, 9090)
+    and not k8s.ns.name in (kube-system, kyverno)
+  output: >
+    Unexpected port binding in container (port=%fd.sport command=%proc.cmdline
+    pod=%k8s.pod.name ns=%k8s.ns.name)
+  priority: NOTICE
+  tags: [kyverno_companion, network, mitre_command_and_control]
+```
+
+---
+
+### Example 13 — Require Health Probes
+
+**Why it matters:** Without liveness and readiness probes, Kubernetes can't detect unhealthy containers. A container that's hung, deadlocked, or compromised will keep receiving traffic.
+
+#### Kyverno Policy (Prevention)
+
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-pod-probes
+  annotations:
+    policies.kyverno.io/title: Require Pod Probes
+    policies.kyverno.io/category: Best Practices
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      All containers must define liveness and readiness probes to ensure
+      Kubernetes can detect and recover from unhealthy states.
+    pod-policies.kyverno.io/autogen-controllers: DaemonSet,Deployment,StatefulSet
+spec:
+  validationFailureAction: Audit
+  rules:
+    - name: validate-probes
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "Liveness and readiness probes are required for all containers."
+        pattern:
+          spec:
+            containers:
+              - livenessProbe: "?*"
+                readinessProbe: "?*"
+```
+
+#### Falco Rule (Detection)
+
+```yaml
+- rule: Container Process Crash Loop Detected
+  desc: >
+    Detects repeated process crashes in a container, which may indicate
+    an unhealthy application that is bypassing health probe checks.
+  condition: >
+    spawned_process and container
+    and proc.name in (sh, bash)
+    and proc.cmdline contains "exit"
+    and proc.duration <= 5000000000
+  output: >
+    Rapid process restart detected — possible crash loop (command=%proc.cmdline
+    pod=%k8s.pod.name ns=%k8s.ns.name)
+  priority: NOTICE
+  tags: [kyverno_companion, health, reliability]
+```
+
+---
+
+### Example 14 — Require Standard Labels (Mutation)
+
+**Why it matters:** Consistent labeling enables filtering, monitoring, and cost allocation. Without labels, you can't answer "who owns this pod?" or "which team's pods are consuming the most resources?"
+
+#### Kyverno Policy (Prevention — Validate)
+
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-labels
+  annotations:
+    policies.kyverno.io/title: Require Standard Labels
+    policies.kyverno.io/category: Best Practices
+    policies.kyverno.io/severity: low
+    policies.kyverno.io/description: >-
+      All Pods must have the app.kubernetes.io/name and
+      app.kubernetes.io/managed-by labels.
+spec:
+  validationFailureAction: Audit
+  rules:
+    - name: require-app-label
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "The label 'app.kubernetes.io/name' is required."
+        pattern:
+          metadata:
+            labels:
+              app.kubernetes.io/name: "?*"
+```
+
+> **No Falco companion** — labels are a metadata concern. There's no runtime syscall that corresponds to "missing labels." This is a prevention-only control.
+
+---
+
+### Example 15 — Generate Default-Deny Network Policy
+
+**Why it matters:** Without a NetworkPolicy, all pods can communicate with all other pods (and the internet). A default-deny policy ensures zero-trust networking — traffic is blocked unless explicitly allowed.
+
+#### Kyverno Policy (Generation)
+
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: generate-default-deny-netpol
+  annotations:
+    policies.kyverno.io/title: Generate Default-Deny Network Policy
+    policies.kyverno.io/category: Network Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Automatically creates a default-deny NetworkPolicy in every new
+      namespace to enforce zero-trust networking.
+spec:
+  rules:
+    - name: generate-default-deny
+      match:
+        any:
+          - resources:
+              kinds:
+                - Namespace
+      exclude:
+        any:
+          - resources:
+              namespaces:
+                - kube-system
+                - kube-public
+                - kube-node-lease
+                - kyverno
+                - argocd
+                - falco
+      generate:
+        kind: NetworkPolicy
+        apiVersion: networking.k8s.io/v1
+        name: default-deny-all
+        namespace: "{{request.object.metadata.name}}"
+        synchronize: true
+        data:
+          spec:
+            podSelector: {}
+            policyTypes:
+              - Ingress
+              - Egress
+```
+
+**What `synchronize: true` means:** If you update the Kyverno policy, the generated NetworkPolicy in every namespace also updates. If someone deletes the generated NetworkPolicy, Kyverno recreates it.
+
+#### Falco Rule (Detection)
+
+```yaml
+- rule: Unexpected Outbound Connection from Container
+  desc: >
+    Detects outbound network connections to destinations outside the
+    cluster's internal network ranges.
+  condition: >
+    evt.type = connect and evt.dir = <
+    and container
+    and fd.typechar = 4
+    and fd.ip != "0.0.0.0"
+    and not fd.sip in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+    and not k8s.ns.name in (kube-system, kyverno)
+  output: >
+    Unexpected outbound connection (connection=%fd.name command=%proc.cmdline
+    pod=%k8s.pod.name ns=%k8s.ns.name)
+  priority: WARNING
+  tags: [kyverno_companion, network, mitre_exfiltration]
+```
+
+---
+
+### Example 16 — Mutate Image Pull Policy
+
+**Why it matters:** If someone accidentally deploys `:latest` with `imagePullPolicy: IfNotPresent`, Kubernetes may use a cached (potentially stale or compromised) image. This mutation ensures `:latest` always pulls fresh.
+
+#### Kyverno Policy (Mutation)
+
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: mutate-image-pull-policy
+  annotations:
+    policies.kyverno.io/title: Set Image Pull Policy to Always for Latest
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: low
+    policies.kyverno.io/description: >-
+      Automatically sets imagePullPolicy to Always for containers using
+      the :latest tag.
+spec:
+  rules:
+    - name: set-pull-always
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      mutate:
+        patchStrategicMerge:
+          spec:
+            containers:
+              - (image): "*:latest"
+                imagePullPolicy: "Always"
+            =(initContainers):
+              - (image): "*:latest"
+                imagePullPolicy: "Always"
+```
+
+**What `(image): "*:latest"` means:** The parentheses make `image` an anchor — "find containers where image matches `*:latest`, and apply this patch to those containers." It's a conditional mutation.
+
+> **No Falco companion** — this is a mutation-only policy. The `:latest` detection is already covered by Example 5.
+
+---
+
+### Example 17 — Add PSS Labels to Namespaces
+
+**Why it matters:** Kubernetes Pod Security Admission (PSA) uses namespace labels to enforce Pod Security Standards. This policy ensures every namespace gets the `baseline` security level by default.
+
+#### Kyverno Policy (Mutation)
+
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: add-pss-labels
+  annotations:
+    policies.kyverno.io/title: Add Pod Security Standards Labels
+    policies.kyverno.io/category: Pod Security Standards
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Automatically adds Pod Security Standard labels to new namespaces
+      to enforce baseline security at the namespace level.
+spec:
+  rules:
+    - name: add-pss-baseline
+      match:
+        any:
+          - resources:
+              kinds:
+                - Namespace
+      exclude:
+        any:
+          - resources:
+              namespaces:
+                - kube-system
+                - kube-public
+                - kube-node-lease
+      mutate:
+        patchStrategicMerge:
+          metadata:
+            labels:
+              pod-security.kubernetes.io/enforce: "baseline"
+              pod-security.kubernetes.io/enforce-version: "latest"
+              pod-security.kubernetes.io/warn: "restricted"
+              pod-security.kubernetes.io/warn-version: "latest"
+```
+
+> **No Falco companion** — PSS labels are namespace metadata. Runtime enforcement of the actual security controls is handled by Examples 1–9.
+
+---
+
+### Example 18 — Detect Shell in Container (Runtime Only)
+
+**Why it matters:** An interactive shell inside a production container is a strong indicator of either debugging by an operator (risky) or an attacker who has gained initial access. No admission policy can prevent this — the container itself is legitimate, only the *behavior* is suspicious.
+
+> **No Kyverno companion** — Kyverno operates at admission time. It cannot prevent `kubectl exec` sessions or shells spawned by application vulnerabilities.
+
+#### Falco Rule (Detection)
+
+```yaml
+- rule: Interactive Shell Spawned in Container
+  desc: >
+    Detects an interactive shell (bash, sh, zsh) spawned inside a
+    container. This is a common post-exploitation indicator.
+  condition: >
+    spawned_process and container
+    and proc.name in (bash, sh, zsh, ksh, csh, fish, dash)
+    and proc.tty != 0
+    and not k8s.ns.name in (kube-system, kyverno)
+  output: >
+    Interactive shell spawned in container (user=%user.name shell=%proc.name
+    command=%proc.cmdline pod=%k8s.pod.name ns=%k8s.ns.name
+    image=%container.image.repository)
+  priority: WARNING
+  tags: [runtime_only, shell, mitre_execution]
+```
+
+---
+
+### Example 19 — Detect Crypto Mining (Runtime Only)
+
+**Why it matters:** Cryptojacking is one of the most common Kubernetes attacks. Attackers exploit exposed APIs or vulnerable applications to run miners inside containers, consuming your cloud compute bill.
+
+> **No Kyverno companion** — the containers are legitimate; the malicious processes are launched *inside* them after deployment.
+
+#### Falco Rule (Detection)
+
+```yaml
+- list: crypto_mining_processes
+  items: [xmrig, minerd, minergate, cpuminer, ethminer, cgminer, bfgminer, nbminer, t-rex, gminer, lolminer]
+
+- list: crypto_mining_pools
+  items: [pool.minergate.com, xmr.pool.minergate.com, monerohash.com, minexmr.com, nanopool.org, hashvault.pro, supportxmr.com, gulf.moneroocean.stream]
+
+- rule: Crypto Mining Process Detected
+  desc: >
+    Detects known cryptocurrency mining processes or connections to
+    known mining pool domains.
+  condition: >
+    spawned_process and container
+    and (proc.name in (crypto_mining_processes)
+      or proc.cmdline contains "stratum+tcp://"
+      or proc.cmdline contains "stratum+ssl://"
+      or proc.cmdline icontains "cryptonight"
+      or proc.cmdline icontains "randomx")
+  output: >
+    Crypto mining detected (command=%proc.cmdline pod=%k8s.pod.name
+    ns=%k8s.ns.name image=%container.image.repository user=%user.name)
+  priority: CRITICAL
+  tags: [runtime_only, crypto_mining, mitre_resource_hijacking]
+```
+
+---
+
+### Example 20 — Detect Sensitive File Access (Runtime Only)
+
+**Why it matters:** Reading `/etc/shadow`, private keys, or Kubernetes config files from inside a container is a classic credential harvesting technique. These files should never be accessed by application processes.
+
+> **No Kyverno companion** — file access happens at runtime, not at admission time.
+
+#### Falco Rule (Detection)
+
+```yaml
+- list: sensitive_file_paths
+  items:
+    - /etc/shadow
+    - /etc/gshadow
+    - /etc/master.passwd
+
+- rule: Sensitive File Read in Container
+  desc: >
+    Detects access to sensitive credential files from inside a container.
+  condition: >
+    evt.type in (open, openat, openat2) and evt.dir = <
+    and container
+    and evt.is_open_read = true
+    and (fd.name in (/etc/shadow, /etc/gshadow, /etc/master.passwd)
+      or fd.name endswith ".pem"
+      or fd.name endswith ".key"
+      or fd.name endswith ".p12"
+      or fd.name endswith ".pfx"
+      or fd.name contains "id_rsa"
+      or fd.name contains "id_ed25519")
+    and not proc.name in (sshd, ssh-agent)
+  output: >
+    Sensitive file read in container (file=%fd.name command=%proc.cmdline
+    pod=%k8s.pod.name ns=%k8s.ns.name user=%user.name)
+  priority: ERROR
+  tags: [runtime_only, credential_access, mitre_credential_access]
+```
+
+---
+
+### Example 21 — Detect Log Tampering (Runtime Only)
+
+**Why it matters:** Attackers commonly delete or truncate log files to cover their tracks after a breach. If `/var/log/` files are being deleted inside a container, someone is hiding evidence.
+
+> **No Kyverno companion** — log file deletion is a runtime behavior.
+
+#### Falco Rule (Detection)
+
+```yaml
+- rule: Log File Deletion in Container
+  desc: >
+    Detects deletion of log files inside a container, which may indicate
+    an attacker covering their tracks.
+  condition: >
+    evt.type in (unlink, unlinkat, rename, renameat) and evt.dir = <
+    and container
+    and (fd.name startswith "/var/log/"
+      or fd.name endswith ".log"
+      or fd.name contains "syslog"
+      or fd.name contains "auth.log"
+      or fd.name contains "history")
+    and not proc.name in (logrotate, journald)
+  output: >
+    Log file deleted in container (file=%fd.name command=%proc.cmdline
+    pod=%k8s.pod.name ns=%k8s.ns.name user=%user.name)
+  priority: ERROR
+  tags: [runtime_only, log_tampering, mitre_defense_evasion]
+```
+
+---
+
+### Example 22 — Detect Symlink Attacks (Runtime Only)
+
+**Why it matters:** Symlink attacks (CVE-2021-25741 and similar) let containers escape their filesystem boundaries by creating symbolic links that point to host paths. This is a container escape vector.
+
+> **No Kyverno companion** — symlink creation is a runtime operation.
+
+#### Falco Rule (Detection)
+
+```yaml
+- rule: Symlink Created to Sensitive Path
+  desc: >
+    Detects creation of symbolic links pointing to sensitive paths,
+    which is a common container escape technique (CVE-2021-25741).
+  condition: >
+    evt.type in (symlink, symlinkat) and evt.dir = <
+    and container
+    and (evt.arg.target startswith "/etc/"
+      or evt.arg.target startswith "/proc/"
+      or evt.arg.target startswith "/sys/"
+      or evt.arg.target startswith "/var/run/")
+  output: >
+    Symlink to sensitive path created (target=%evt.arg.target link=%fd.name
+    command=%proc.cmdline pod=%k8s.pod.name ns=%k8s.ns.name)
+  priority: CRITICAL
+  tags: [runtime_only, symlink_attack, mitre_privilege_escalation]
+```
+
+---
+
+### Example 23 — Detect Reverse Shell (Runtime Only)
+
+**Why it matters:** A reverse shell is the classic "phone home" technique. The attacker gets the compromised container to initiate a connection back to their server, giving them interactive access. This is the most dangerous post-exploitation step.
+
+> **No Kyverno companion** — reverse shells are runtime behaviors, not deployment configurations.
+
+#### Falco Rule (Detection)
+
+```yaml
+- rule: Reverse Shell Detected in Container
+  desc: >
+    Detects processes commonly used to establish reverse shells, including
+    netcat, bash redirections, and scripting language one-liners.
+  condition: >
+    spawned_process and container
+    and (proc.name in (nc, ncat, netcat, nmap, socat)
+      or (proc.name = "bash" and proc.cmdline contains "/dev/tcp/")
+      or (proc.name = "python" and proc.cmdline contains "socket")
+      or (proc.name = "python3" and proc.cmdline contains "socket")
+      or (proc.name = "perl" and proc.cmdline contains "socket")
+      or (proc.name = "ruby" and proc.cmdline contains "TCPSocket")
+      or (proc.name = "php" and proc.cmdline contains "fsockopen"))
+  output: >
+    Possible reverse shell detected (command=%proc.cmdline pod=%k8s.pod.name
+    ns=%k8s.ns.name image=%container.image.repository user=%user.name)
+  priority: CRITICAL
+  tags: [runtime_only, reverse_shell, mitre_command_and_control]
+```
+
+---
+
+## 6. Applying the Policies
+
+### Kyverno Policies
+
+All 17 Kyverno policies are packaged in a single deployable manifest:
+
+```bash
+# Apply all Kyverno ClusterPolicies
+kubectl apply -f manifests/kyverno/kyverno-policies.yaml
+```
+
+Verify they're active:
+```bash
+kubectl get clusterpolicies
+```
+
+Expected output:
+```
+NAME                                ADMISSION   BACKGROUND   VALIDATE ACTION   READY   AGE
+disallow-privileged-containers      true        true         Enforce           True    10s
+disallow-host-namespaces            true        true         Enforce           True    10s
+require-run-as-non-root             true        true         Enforce           True    10s
+restrict-image-registries           true        true         Enforce           True    10s
+...
+```
+
+### Falco Rules
+
+The companion Falco rules are a ConfigMap that extends the existing custom rules:
+
+```bash
+# Apply companion Falco rules
+kubectl apply -f manifests/falco/falco-kyverno-companion-rules.yaml
+```
+
+Reloader auto-restarts Falco to pick up the new rules (see [Falco Setup Guide](./falco-setup-guide.md#part-4--stakater-reloader-auto-restart-on-rule-changes)).
+
+### Test a policy
+
+Try creating a privileged pod — Kyverno should block it:
+
+```bash
+# This should be REJECTED by Kyverno
+kubectl run test-priv --image=nginx --restart=Never \
+  --overrides='{"spec":{"containers":[{"name":"test-priv","image":"nginx","securityContext":{"privileged":true}}]}}'
+```
+
+Expected error:
+```
+Error from server: admission webhook "validate.kyverno.svc-fail" denied the request:
+resource Pod/default/test-priv was blocked due to the following policies:
+disallow-privileged-containers:
+  deny-privileged: Privileged containers are not allowed.
+```
+
+---
+
+## 7. Audit vs. Enforce — Rollout Strategy
+
+> **Golden rule:** Start in Audit mode. Observe. Fix false positives. Then switch to Enforce.
+
+### Recommended rollout phases
+
+| Phase | Duration | `validationFailureAction` | What happens |
+|---|---|---|---|
+| **1. Audit** | 1–2 weeks | `Audit` | Policies log violations but don't block anything. Check `PolicyReport` resources. |
+| **2. Warn** | 1 week | `Audit` + warnings | Same as audit, but users see warning messages on `kubectl apply`. |
+| **3. Enforce** | Ongoing | `Enforce` | Violations are blocked. Non-compliant resources cannot be created. |
+
+### Check audit results
+
+```bash
+# View policy violations across the cluster
+kubectl get policyreport -A
+
+# Get detailed report for a specific namespace
+kubectl get policyreport -n default -o yaml
+```
+
+### Policies that should start in Audit mode
+
+Some policies need tuning before enforcement:
+
+| Policy | Start in | Why |
+|---|---|---|
+| `require-readonly-rootfs` | Audit | Many apps write to `/tmp` — need to add `emptyDir` volumes first |
+| `require-pod-probes` | Audit | Some system pods (jobs, CronJobs) don't need probes |
+| `require-labels` | Audit | Existing deployments may not have standard labels yet |
+| `disallow-default-sa-token` | Audit | Some apps legitimately need the SA token |
+
+### Policies safe to enforce immediately
+
+| Policy | Why safe |
+|---|---|
+| `disallow-privileged-containers` | There's almost never a legitimate need |
+| `disallow-host-namespaces` | Same — very rarely needed |
+| `disallow-privilege-escalation` | Most applications don't need this |
+| `disallow-latest-tag` | Easy for developers to fix — just add a tag |
+| `disallow-nodeport-services` | Use Ingress/LoadBalancer instead |
+| `disallow-hostpath-volumes` | Use PVCs instead |
+
+---
+
+## 8. Quick Reference
+
+### All 23 examples at a glance
+
+| # | Policy Name | Type | Mode | Kyverno | Falco |
+|---|---|---|---|---|---|
+| 1 | Privileged Containers | Validate | Enforce | ✅ | ✅ |
+| 2 | Host Namespaces | Validate | Enforce | ✅ | ✅ |
+| 3 | Non-Root User | Validate | Enforce | ✅ | ✅ |
+| 4 | Image Registries | Validate | Enforce | ✅ | ✅ |
+| 5 | Latest Tag | Validate | Enforce | ✅ | ✅ |
+| 6 | Resource Limits | Validate | Enforce | ✅ | ✅ |
+| 7 | Read-Only Root FS | Validate | Audit | ✅ | ✅ |
+| 8 | Drop Capabilities | Validate | Enforce | ✅ | ✅ |
+| 9 | Privilege Escalation | Validate | Enforce | ✅ | ✅ |
+| 10 | HostPath Volumes | Validate | Enforce | ✅ | ✅ |
+| 11 | SA Token Mount | Validate | Audit | ✅ | ✅ |
+| 12 | NodePort Services | Validate | Enforce | ✅ | ✅ |
+| 13 | Health Probes | Validate | Audit | ✅ | ✅ |
+| 14 | Standard Labels | Validate | Audit | ✅ | — |
+| 15 | Network Policy | Generate | — | ✅ | ✅ |
+| 16 | Image Pull Policy | Mutate | — | ✅ | — |
+| 17 | PSS Labels | Mutate | — | ✅ | — |
+| 18 | Shell in Container | — | — | — | ✅ |
+| 19 | Crypto Mining | — | — | — | ✅ |
+| 20 | Sensitive File Access | — | — | — | ✅ |
+| 21 | Log Tampering | — | — | — | ✅ |
+| 22 | Symlink Attacks | — | — | — | ✅ |
+| 23 | Reverse Shell | — | — | — | ✅ |
+
+### Quick commands
+
+| Task | Command |
+|---|---|
+| Apply Kyverno policies | `kubectl apply -f manifests/kyverno/kyverno-policies.yaml` |
+| Apply Falco companion rules | `kubectl apply -f manifests/falco/falco-kyverno-companion-rules.yaml` |
+| View Kyverno policy reports | `kubectl get policyreport -A` |
+| View Falco alerts | `kubectl port-forward svc/falco-falcosidekick-ui -n falco 2802:2802` |
+| Check Kyverno policy status | `kubectl get clusterpolicies` |
+| Test a policy (dry run) | `kubectl apply -f test-pod.yaml --dry-run=server` |
+| View Kyverno logs | `kubectl logs -l app.kubernetes.io/component=admission-controller -n kyverno` |
