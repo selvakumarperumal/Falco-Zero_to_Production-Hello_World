@@ -9,6 +9,81 @@
 ## Description
 Enforces defined resource quotas (CPU/Memory) on containers to prevent noisy-neighbor scenarios. Detects execution of benchmarking/abuse tools at runtime.
 
+## Kyverno Policy Manifest
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-resource-limits
+  annotations:
+    policies.kyverno.io/title: Require Resource Limits
+    policies.kyverno.io/category: Best Practices
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      All containers must define CPU and memory limits to prevent resource
+      exhaustion on shared nodes.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: check-resource-limits
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "CPU and memory limits are required for all containers."
+        pattern:
+          spec:
+            containers:
+              - resources:
+                  limits:
+                    cpu: "?*"
+                    memory: "?*"
+```
+
+## Falco Rule Manifest
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-custom-rules
+  namespace: falco
+  labels:
+    app.kubernetes.io/part-of: falco
+    app.kubernetes.io/component: custom-rules
+data:
+  # -------------------------------------------------------------------------
+  # Original hello-world rules (preserved from existing ConfigMap)
+  # -------------------------------------------------------------------------
+  hello-world-rules.yaml: |-
+    - rule: Container Resource Exhaustion Behavior
+      desc: >
+        Detects a container process consuming excessive resources,
+        potentially indicating a fork bomb or resource exhaustion attack.
+      condition: >
+        spawned_process and container
+        and proc.name in (stress, stress-ng, yes, dd)
+        and not k8s.ns.name in (kube-system)
+      output: >
+        Resource exhaustion tool detected (command=%proc.cmdline
+        pod=%k8s.pod.name ns=%k8s.ns.name image=%container.image.repository)
+      priority: WARNING
+      tags: [kyverno_companion, resource_abuse, mitre_impact]
+```
+
+## Detailed Explanation
+### Kyverno Policy Manifest Explanation
+The policy prevents container resource starvation:
+- **`cpu: "?*"` and `memory: "?*"`**: Enforces that both resource limit keys must be set with at least one character, ensuring limits are configured.
+
+### Falco Rule Manifest Explanation
+The companion Falco rule detects compute stress tools running inside containers:
+- **`proc.name in (stress, stress-ng, yes, dd)`**: Listens for process execution of known benchmarking or disk write utilities.
+- **`not k8s.ns.name in (kube-system)`**: Exempts system namespaces to allow standard cluster-level benchmarking.
+
 ## How to Test
 ### Kyverno (Admission Check)
 Try to create a pod without specifying resource limits (should be blocked):

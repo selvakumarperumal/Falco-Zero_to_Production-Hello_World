@@ -9,6 +9,81 @@
 ## Description
 Blocks Services using `type: NodePort` which bypasses Ingress/LoadBalancers and exposes host-level ports. Detects containers binding to unexpected non-standard listening ports at runtime.
 
+## Kyverno Policy Manifest
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-nodeport-services
+  annotations:
+    policies.kyverno.io/title: Disallow NodePort Services
+    policies.kyverno.io/category: Network Security
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      NodePort services expose ports on every cluster node. Use LoadBalancer
+      or Ingress instead for controlled external access.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: deny-nodeport
+      match:
+        any:
+          - resources:
+              kinds:
+                - Service
+      validate:
+        message: "NodePort services are not allowed. Use LoadBalancer or Ingress."
+        pattern:
+          spec:
+            type: "!NodePort"
+```
+
+## Falco Rule Manifest
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-custom-rules
+  namespace: falco
+  labels:
+    app.kubernetes.io/part-of: falco
+    app.kubernetes.io/component: custom-rules
+data:
+  # -------------------------------------------------------------------------
+  # Original hello-world rules (preserved from existing ConfigMap)
+  # -------------------------------------------------------------------------
+  hello-world-rules.yaml: |-
+    - rule: Unexpected Listening Port in Container
+      desc: >
+        Detects a container process binding to a port outside the expected
+        application range (common for backdoors and reverse shells).
+      condition: >
+        evt.type in (bind, listen) and evt.dir = <
+        and container
+        and fd.sport != 0
+        and not fd.sport in (80, 443, 8080, 8443, 3000, 5000, 9090)
+        and not k8s.ns.name in (kube-system, kyverno)
+      output: >
+        Unexpected port binding in container (port=%fd.sport
+        command=%proc.cmdline pod=%k8s.pod.name ns=%k8s.ns.name)
+      priority: NOTICE
+      tags: [kyverno_companion, network, mitre_command_and_control]
+```
+
+## Detailed Explanation
+### Kyverno Policy Manifest Explanation
+The Kyverno configuration protects node-level network exposure:
+- **`kinds: [Service]`**: Applies only to Kubernetes Service objects.
+- **`spec.type: "!NodePort"`**: Enforces that the service type must NOT be set to NodePort (only ClusterIP or LoadBalancer are permitted).
+
+### Falco Rule Manifest Explanation
+The runtime rule acts as a fallback for unauthorized reverse shell/backdoor listeners:
+- **`evt.type in (bind, listen) and evt.dir = <`**: Matches socket bind or listen syscall completions.
+- **`fd.sport != 0`**: Ensures a source port is allocated.
+- **`not fd.sport in (80, 443, 8080, 8443, 3000, 5000, 9090)`**: Lists approved port exemptions. If a containerized process attempts to open a server socket on any other port, it triggers a `NOTICE` alert.
+
 ## How to Test
 ### Kyverno (Admission Check)
 Try to deploy a service using NodePort (should be blocked):

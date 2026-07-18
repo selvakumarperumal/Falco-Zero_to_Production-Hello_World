@@ -9,6 +9,80 @@
 ## Description
 Ensures containers run as non-root users (UID != 0). Monitors and alerts on root UID execution at runtime.
 
+## Kyverno Policy Manifest
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-run-as-non-root
+  annotations:
+    policies.kyverno.io/title: Require runAsNonRoot
+    policies.kyverno.io/category: Pod Security Standards (Restricted)
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Containers must set runAsNonRoot to true to prevent running as UID 0.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: require-non-root
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "Containers must not run as root. Set securityContext.runAsNonRoot to true."
+        pattern:
+          spec:
+            containers:
+              - securityContext:
+                  runAsNonRoot: true
+            =(initContainers):
+              - securityContext:
+                  runAsNonRoot: true
+```
+
+## Falco Rule Manifest
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-custom-rules
+  namespace: falco
+  labels:
+    app.kubernetes.io/part-of: falco
+    app.kubernetes.io/component: custom-rules
+data:
+  # -------------------------------------------------------------------------
+  # Original hello-world rules (preserved from existing ConfigMap)
+  # -------------------------------------------------------------------------
+  hello-world-rules.yaml: |-
+    - rule: Container Running as Root User
+      desc: >
+        Detects a process running as root (UID 0) inside a container.
+      condition: >
+        spawned_process and container
+        and user.uid = 0
+        and not k8s.ns.name in (kube-system, kyverno)
+      output: >
+        Process running as root in container (user=%user.name uid=%user.uid
+        command=%proc.cmdline pod=%k8s.pod.name ns=%k8s.ns.name)
+      priority: WARNING
+      tags: [kyverno_companion, root_user, mitre_privilege_escalation]
+```
+
+## Detailed Explanation
+### Kyverno Policy Manifest Explanation
+The policy validates the execution context user:
+- **`runAsNonRoot: true`**: Enforces that Kubernetes must check the image configuration (or securityContext) to verify it does not run as user UID 0.
+
+### Falco Rule Manifest Explanation
+The companion Falco rule monitors the active process UID at runtime:
+- **`user.uid = 0`**: Triggers if any process spawns with UID 0 (root).
+- **`not k8s.ns.name in (kube-system, kyverno)`**: Ignores cluster system processes which often require root privileges.
+
 ## How to Test
 ### Kyverno (Admission Check)
 Attempt to deploy a standard root-default container (should be blocked):

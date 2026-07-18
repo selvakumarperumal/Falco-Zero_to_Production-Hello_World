@@ -9,6 +9,48 @@
 ## Description
 Ensures any container specifying the `:latest` tag is updated to use `imagePullPolicy: Always` at admission time. This guarantees that stale cached images are not accidentally reused.
 
+## Kyverno Policy Manifest
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: mutate-image-pull-policy
+  annotations:
+    policies.kyverno.io/title: Set Image Pull Policy to Always for Latest
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: low
+    policies.kyverno.io/description: >-
+      Automatically sets imagePullPolicy to Always for containers using
+      the :latest tag.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  rules:
+    - name: set-pull-always
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      mutate:
+        patchStrategicMerge:
+          spec:
+            containers:
+              - (image): "*:latest"
+                imagePullPolicy: "Always"
+            =(initContainers):
+              - (image): "*:latest"
+                imagePullPolicy: "Always"
+```
+
+## Detailed Explanation
+### Kyverno Policy Manifest Explanation
+The policy alters configurations automatically:
+- **`rules[0].mutate.patchStrategicMerge`**: Configures an inline strategic merge patch.
+- **`spec.containers`**: Iterates through containers.
+- **`(image): "*:latest"`**: In Kyverno, parenthesis on a field represent a conditional check or anchor. This rule only modifies containers where the image tag ends in `latest`.
+- **`imagePullPolicy: "Always"`**: The mutation patch sets the image pull policy to Always for the matched containers.
+
 ## How to Test
 1. Submit a dry-run server request for a pod using `:latest` without specifying the pull policy:
 ```bash

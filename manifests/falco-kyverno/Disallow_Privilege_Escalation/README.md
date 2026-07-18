@@ -9,6 +9,83 @@
 ## Description
 Ensures that `allowPrivilegeEscalation` is configured as false (preventing sub-processes from gaining more privileges than their parent). Detects execution of setuid/setgid binaries inside containers.
 
+## Kyverno Policy Manifest
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-privilege-escalation
+  annotations:
+    policies.kyverno.io/title: Disallow Privilege Escalation
+    policies.kyverno.io/category: Pod Security Standards (Restricted)
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Containers must not allow privilege escalation via setuid/setgid binaries.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: deny-privilege-escalation
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "Privilege escalation is not allowed. Set allowPrivilegeEscalation to false."
+        pattern:
+          spec:
+            containers:
+              - securityContext:
+                  allowPrivilegeEscalation: false
+            =(initContainers):
+              - securityContext:
+                  allowPrivilegeEscalation: false
+```
+
+## Falco Rule Manifest
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-custom-rules
+  namespace: falco
+  labels:
+    app.kubernetes.io/part-of: falco
+    app.kubernetes.io/component: custom-rules
+data:
+  # -------------------------------------------------------------------------
+  # Original hello-world rules (preserved from existing ConfigMap)
+  # -------------------------------------------------------------------------
+  hello-world-rules.yaml: |-
+    - rule: Setuid or Setgid Binary Executed in Container
+      desc: >
+        Detects execution of setuid/setgid binaries inside a container,
+        which can be used for privilege escalation.
+      condition: >
+        spawned_process and container
+        and (proc.name in (sudo, su, newgrp, chsh, chfn, passwd)
+          or proc.name = "pkexec")
+        and not k8s.ns.name in (kube-system)
+      output: >
+        Setuid/setgid binary executed (command=%proc.cmdline user=%user.name
+        pod=%k8s.pod.name ns=%k8s.ns.name image=%container.image.repository)
+      priority: ERROR
+      tags: [kyverno_companion, privilege_escalation, mitre_privilege_escalation]
+```
+
+## Detailed Explanation
+### Kyverno Policy Manifest Explanation
+The policy limits process permissions escalation:
+- **`spec.containers.securityContext.allowPrivilegeEscalation: false`**: Validates that all containers must have this attribute explicitly set to `false`.
+- **`=(initContainers)`**: Ensures the rule is also applied to initialization containers if they exist.
+
+### Falco Rule Manifest Explanation
+The runtime check detects usage of privilege escalation mechanisms:
+- **`proc.name in (sudo, su, newgrp, chsh, chfn, passwd, pkexec)`**: Checks if the spawned process matches known setuid/setgid binary commands.
+- **`not k8s.ns.name in (kube-system)`**: Ignores system tasks operating inside `kube-system` to limit alerts to application namespaces.
+
 ## How to Test
 ### Kyverno (Admission Check)
 Deploy a pod explicitly enabling privilege escalation (should be blocked):

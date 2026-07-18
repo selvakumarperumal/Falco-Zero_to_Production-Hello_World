@@ -9,6 +9,84 @@
 ## Description
 Blocks configuration of `hostPath` volumes which allow pods direct access to the node's filesystem. Monitors and alerts on access to sensitive paths (like `/etc/shadow`, `/var/run/docker.sock`) at runtime.
 
+## Kyverno Policy Manifest
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-hostpath-volumes
+  annotations:
+    policies.kyverno.io/title: Disallow HostPath Volumes
+    policies.kyverno.io/category: Pod Security Standards (Baseline)
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      HostPath volumes give containers direct access to the node filesystem.
+      This policy blocks all hostPath volume mounts.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: deny-hostpath
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "HostPath volumes are not allowed."
+        pattern:
+          spec:
+            =(volumes):
+              - X(hostPath): "null"
+```
+
+## Falco Rule Manifest
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-custom-rules
+  namespace: falco
+  labels:
+    app.kubernetes.io/part-of: falco
+    app.kubernetes.io/component: custom-rules
+data:
+  # -------------------------------------------------------------------------
+  # Original hello-world rules (preserved from existing ConfigMap)
+  # -------------------------------------------------------------------------
+  hello-world-rules.yaml: |-
+    - rule: Sensitive Host Path Accessed from Container
+      desc: >
+        Detects a container accessing sensitive paths on the host
+        filesystem via a hostPath mount.
+      condition: >
+        evt.type in (open, openat, openat2) and evt.dir = <
+        and container
+        and (fd.name startswith "/etc/shadow"
+          or fd.name startswith "/etc/kubernetes"
+          or fd.name startswith "/var/run/docker.sock"
+          or fd.name startswith "/root/.ssh"
+          or fd.name startswith "/root/.kube")
+      output: >
+        Sensitive host path accessed from container (file=%fd.name
+        command=%proc.cmdline pod=%k8s.pod.name ns=%k8s.ns.name)
+      priority: CRITICAL
+      tags: [kyverno_companion, hostpath, mitre_credential_access]
+```
+
+## Detailed Explanation
+### Kyverno Policy Manifest Explanation
+The Kyverno policy protects the host directory hierarchy:
+- **`validationFailureAction: Enforce`**: Instantly rejects the creation of pods that violate the rule.
+- **`validate.pattern.spec.=(volumes)`**: Checks the volumes list.
+- **`X(hostPath): "null"`**: The `X()` validation pattern represents "must not exist". If any volume specifies a `hostPath` key, the pod creation request is denied.
+
+### Falco Rule Manifest Explanation
+The companion Falco rule detects host filesystem reads/writes:
+- **`evt.type in (open, openat, openat2) and evt.dir = <`**: Listens for file open syscall completions.
+- **`fd.name startswith "/etc/shadow"` or `/etc/kubernetes` or `/var/run/docker.sock`**: Targets system files and sockets. If any container opens files in these paths, it generates a `CRITICAL` alert since host paths should never be exposed to runtime workloads.
+
 ## How to Test
 ### Kyverno (Admission Check)
 Try to create a pod mounting a host path (it should be blocked immediately):
