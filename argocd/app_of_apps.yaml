@@ -28,32 +28,32 @@ spec:
       - CreateNamespace=true
       - ServerSideApply=true
 
----
+# ---
 # Falco Custom Rules — syncs ConfigMap from manifests/falco/
 # Push rule changes to Git → ArgoCD auto-applies them
-apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  name: falco-custom-rules
-  namespace: argocd
-  labels:
-    app.kubernetes.io/part-of: falco
-    app.kubernetes.io/component: custom-rules
-  finalizers:
-    - resources-finalizer.argocd.argoproj.io/background
-spec:
-  project: default
-  source:
-    repoURL: https://github.com/selvakumarperumal/Falco-Zero_to_Production-Hello_World.git
-    targetRevision: main
-    path: manifests/falco
-  destination:
-    server: https://kubernetes.default.svc
-    namespace: falco
-  syncPolicy:
-    automated:
-      prune: true
-      selfHeal: true
-    syncOptions:
-      - CreateNamespace=true
-      - ServerSideApply=true
+# apiVersion: argoproj.io/v1alpha1
+# kind: Application
+# metadata:
+#   name: falco-custom-rules
+#   namespace: argocd
+#   labels:
+#     app.kubernetes.io/part-of: falco
+#     app.kubernetes.io/component: custom-rules
+#   finalizers:
+#     - resources-finalizer.argocd.argoproj.io/background
+# spec:
+#   project: default
+#   source:
+#     repoURL: https://github.com/selvakumarperumal/Falco-Zero_to_Production-Hello_World.git
+#     targetRevision: main
+#     path: manifests/falco
+#   destination:
+#     server: https://kubernetes.default.svc
+#     namespace: falco
+#   syncPolicy:
+#     automated:
+#       prune: true
+#       selfHeal: true
+#     syncOptions:
+#       - CreateNamespace=true
+#       - ServerSideApply=true
