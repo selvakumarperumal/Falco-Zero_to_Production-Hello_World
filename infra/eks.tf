@@ -6,7 +6,7 @@ module "eks" {
   kubernetes_version = var.kubernetes_version
 
   # Cluster Networking
-  vpc_id     = module.vpc.default_vpc_id
+  vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnets
 
   # Cluster Access
