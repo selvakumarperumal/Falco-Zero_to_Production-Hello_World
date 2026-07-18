@@ -22,7 +22,8 @@ provider "helm" {
     cluster_certificate_authority_data = base64decode(module.eks.cluster_certificate_authority_data)
 
     exec = {
-      command = "aws"
+      api_version = "client.authentication.k8s.io/v1beta1"
+      command     = "aws"
       args = [
         "eks",
         "get-token",
