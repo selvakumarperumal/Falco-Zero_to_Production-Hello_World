@@ -17,15 +17,15 @@ spec:
     targetRevision: {{ .Values.kyverno.chart_version }}
     helm:
       values: |
-        replicaCount: 3
+        replicaCount: 1
         admissionController:
-          replicas: 3
+          replicas: 1
         backgroundController:
-          replicas: 2
+          replicas: 1
         cleanupController:
-          replicas: 2
+          replicas: 1
         reportsController:
-          replicas: 2
+          replicas: 1
   destination:
     server: https://kubernetes.default.svc
     namespace: {{ .Values.kyverno.namespace }}

@@ -32,8 +32,10 @@ spec:
               mountPath: /etc/falco/rules.d
         falcosidekick:
           enabled: {{ .Values.falco.falcosidekick.enabled }}
+          replicaCount: 1
           webui:
             enabled: {{ .Values.falco.falcosidekick.webui.enabled }}
+            replicaCount: 1
             redis:
               storageEnabled: {{ .Values.falco.falcosidekick.webui.redis.storageEnabled }}
               storageSize: {{ .Values.falco.falcosidekick.webui.redis.storageSize }}
