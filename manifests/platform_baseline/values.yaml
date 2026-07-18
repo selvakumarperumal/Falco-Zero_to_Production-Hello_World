@@ -29,7 +29,7 @@ falco:
     webui:
       enabled: true
       redis:
-        storageEnabled: true
+        storageEnabled: false
         storageSize: "1Gi"
 
   # Falco engine configuration
