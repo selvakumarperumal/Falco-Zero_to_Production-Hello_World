@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-custom-rules
+  namespace: falco
+  labels:
+    app.kubernetes.io/part-of: falco
+    app.kubernetes.io/component: custom-rules
+data:
+  # -------------------------------------------------------------------------
+  # Original hello-world rules (preserved from existing ConfigMap)
+  # -------------------------------------------------------------------------
+  hello-world-rules.yaml: |-
+    - rule: Service Account Token Accessed in Container
+      desc: >
+        Detects a container process reading the Kubernetes service account
+        token file, which could indicate credential harvesting.
+      condition: >
+        evt.type in (open, openat, openat2) and evt.dir = <
+        and container
+        and fd.name contains "/var/run/secrets/kubernetes.io/serviceaccount"
+        and not k8s.ns.name in (kube-system, kyverno)
+        and not proc.name in (pause, tini)
+      output: >
+        Service account token accessed (file=%fd.name command=%proc.cmdline
+        pod=%k8s.pod.name ns=%k8s.ns.name user=%user.name)
+      priority: WARNING
+      tags: [kyverno_companion, sa_token, mitre_credential_access]

@@ -1,0 +1,27 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-nodeport-services
+  annotations:
+    policies.kyverno.io/title: Disallow NodePort Services
+    policies.kyverno.io/category: Network Security
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      NodePort services expose ports on every cluster node. Use LoadBalancer
+      or Ingress instead for controlled external access.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: deny-nodeport
+      match:
+        any:
+          - resources:
+              kinds:
+                - Service
+      validate:
+        message: "NodePort services are not allowed. Use LoadBalancer or Ingress."
+        pattern:
+          spec:
+            type: "!NodePort"

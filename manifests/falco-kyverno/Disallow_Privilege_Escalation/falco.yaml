@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-custom-rules
+  namespace: falco
+  labels:
+    app.kubernetes.io/part-of: falco
+    app.kubernetes.io/component: custom-rules
+data:
+  # -------------------------------------------------------------------------
+  # Original hello-world rules (preserved from existing ConfigMap)
+  # -------------------------------------------------------------------------
+  hello-world-rules.yaml: |-
+    - rule: Setuid or Setgid Binary Executed in Container
+      desc: >
+        Detects execution of setuid/setgid binaries inside a container,
+        which can be used for privilege escalation.
+      condition: >
+        spawned_process and container
+        and (proc.name in (sudo, su, newgrp, chsh, chfn, passwd)
+          or proc.name = "pkexec")
+        and not k8s.ns.name in (kube-system)
+      output: >
+        Setuid/setgid binary executed (command=%proc.cmdline user=%user.name
+        pod=%k8s.pod.name ns=%k8s.ns.name image=%container.image.repository)
+      priority: ERROR
+      tags: [kyverno_companion, privilege_escalation, mitre_privilege_escalation]

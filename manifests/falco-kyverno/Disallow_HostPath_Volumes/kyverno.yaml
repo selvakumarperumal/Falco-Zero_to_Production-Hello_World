@@ -1,0 +1,28 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-hostpath-volumes
+  annotations:
+    policies.kyverno.io/title: Disallow HostPath Volumes
+    policies.kyverno.io/category: Pod Security Standards (Baseline)
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      HostPath volumes give containers direct access to the node filesystem.
+      This policy blocks all hostPath volume mounts.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: deny-hostpath
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "HostPath volumes are not allowed."
+        pattern:
+          spec:
+            =(volumes):
+              - X(hostPath): "null"

@@ -1,0 +1,30 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-latest-tag
+  annotations:
+    policies.kyverno.io/title: Disallow Latest Tag
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Using the :latest tag makes deployments non-reproducible. Require
+      explicit version tags.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: require-image-tag
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "An image tag is required and must not be ':latest'."
+        pattern:
+          spec:
+            containers:
+              - image: "!*:latest & *:*"
+            =(initContainers):
+              - image: "!*:latest & *:*"

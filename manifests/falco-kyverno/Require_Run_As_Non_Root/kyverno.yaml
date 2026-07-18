@@ -1,0 +1,31 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-run-as-non-root
+  annotations:
+    policies.kyverno.io/title: Require runAsNonRoot
+    policies.kyverno.io/category: Pod Security Standards (Restricted)
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Containers must set runAsNonRoot to true to prevent running as UID 0.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: require-non-root
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "Containers must not run as root. Set securityContext.runAsNonRoot to true."
+        pattern:
+          spec:
+            containers:
+              - securityContext:
+                  runAsNonRoot: true
+            =(initContainers):
+              - securityContext:
+                  runAsNonRoot: true

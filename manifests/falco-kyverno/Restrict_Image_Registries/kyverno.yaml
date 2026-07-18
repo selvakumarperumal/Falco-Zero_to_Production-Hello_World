@@ -1,0 +1,48 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: restrict-image-registries
+  annotations:
+    policies.kyverno.io/title: Restrict Image Registries
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Images may only be pulled from approved registries.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: validate-registries
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: >-
+          Images must come from an approved registry.
+          Allowed: ECR (*.dkr.ecr.*.amazonaws.com), ghcr.io, gcr.io, registry.k8s.io.
+        foreach:
+          - list: "request.object.spec.containers"
+            deny:
+              conditions:
+                all:
+                  - key: "{{ element.image }}"
+                    operator: AnyNotIn
+                    value:
+                      - "*.dkr.ecr.*.amazonaws.com/*"
+                      - "ghcr.io/*"
+                      - "gcr.io/*"
+                      - "registry.k8s.io/*"
+          - list: "request.object.spec.initContainers || []"
+            deny:
+              conditions:
+                all:
+                  - key: "{{ element.image }}"
+                    operator: AnyNotIn
+                    value:
+                      - "*.dkr.ecr.*.amazonaws.com/*"
+                      - "ghcr.io/*"
+                      - "gcr.io/*"
+                      - "registry.k8s.io/*"

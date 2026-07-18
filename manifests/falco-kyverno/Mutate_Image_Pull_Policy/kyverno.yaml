@@ -1,0 +1,30 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: mutate-image-pull-policy
+  annotations:
+    policies.kyverno.io/title: Set Image Pull Policy to Always for Latest
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: low
+    policies.kyverno.io/description: >-
+      Automatically sets imagePullPolicy to Always for containers using
+      the :latest tag.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  rules:
+    - name: set-pull-always
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      mutate:
+        patchStrategicMerge:
+          spec:
+            containers:
+              - (image): "*:latest"
+                imagePullPolicy: "Always"
+            =(initContainers):
+              - (image): "*:latest"
+                imagePullPolicy: "Always"

@@ -1,0 +1,36 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: add-pss-labels
+  annotations:
+    policies.kyverno.io/title: Add Pod Security Standards Labels
+    policies.kyverno.io/category: Pod Security Standards
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Automatically adds Pod Security Standard labels to new namespaces
+      to enforce baseline security at the namespace level.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  rules:
+    - name: add-pss-baseline
+      match:
+        any:
+          - resources:
+              kinds:
+                - Namespace
+      exclude:
+        any:
+          - resources:
+              namespaces:
+                - kube-system
+                - kube-public
+                - kube-node-lease
+      mutate:
+        patchStrategicMerge:
+          metadata:
+            labels:
+              pod-security.kubernetes.io/enforce: "baseline"
+              pod-security.kubernetes.io/enforce-version: "latest"
+              pod-security.kubernetes.io/warn: "restricted"
+              pod-security.kubernetes.io/warn-version: "latest"

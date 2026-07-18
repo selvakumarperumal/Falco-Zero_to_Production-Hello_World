@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-custom-rules
+  namespace: falco
+  labels:
+    app.kubernetes.io/part-of: falco
+    app.kubernetes.io/component: custom-rules
+data:
+  # -------------------------------------------------------------------------
+  # Original hello-world rules (preserved from existing ConfigMap)
+  # -------------------------------------------------------------------------
+  hello-world-rules.yaml: |-
+    - rule: Write to Container Root Filesystem
+      desc: >
+        Detects file writes to the container root filesystem, excluding
+        known-safe paths like /tmp and /proc.
+      condition: >
+        evt.type in (open, openat, openat2) and evt.dir = <
+        and container
+        and evt.is_open_write = true
+        and not fd.name startswith "/tmp"
+        and not fd.name startswith "/proc"
+        and not fd.name startswith "/dev"
+        and not fd.name startswith "/sys"
+        and fd.name != ""
+        and not k8s.ns.name in (kube-system, kyverno)
+      output: >
+        File written to container root fs (file=%fd.name command=%proc.cmdline
+        pod=%k8s.pod.name ns=%k8s.ns.name)
+      priority: WARNING
+      tags: [kyverno_companion, rootfs_write, mitre_persistence]

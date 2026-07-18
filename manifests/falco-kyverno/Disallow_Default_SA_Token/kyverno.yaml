@@ -1,0 +1,34 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-default-sa-token
+  annotations:
+    policies.kyverno.io/title: Disallow Default Service Account Token
+    policies.kyverno.io/category: Security Best Practices
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Pods using the default service account must not automount the
+      service account token unless explicitly needed.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationFailureAction: Audit
+  rules:
+    - name: deny-default-sa-token
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      preconditions:
+        all:
+          - key: "{{ request.object.spec.serviceAccountName || 'default' }}"
+            operator: Equals
+            value: "default"
+      validate:
+        message: >-
+          Pods using the default service account must set
+          automountServiceAccountToken to false.
+        pattern:
+          spec:
+            automountServiceAccountToken: false

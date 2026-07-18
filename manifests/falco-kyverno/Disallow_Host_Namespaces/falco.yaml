@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-custom-rules
+  namespace: falco
+  labels:
+    app.kubernetes.io/part-of: falco
+    app.kubernetes.io/component: custom-rules
+data:
+  # -------------------------------------------------------------------------
+  # Original hello-world rules (preserved from existing ConfigMap)
+  # -------------------------------------------------------------------------
+  hello-world-rules.yaml: |-
+    - rule: Container Using Host Namespace
+      desc: >
+        Detects a container running with host PID or network namespace.
+      condition: >
+        container_started and container
+        and (container.privileged = true or k8s.pod.name != "")
+        and (evt.arg.flags contains "CLONE_NEWPID"
+          or evt.arg.flags contains "CLONE_NEWNET")
+      output: >
+        Container uses host namespace (pod=%k8s.pod.name ns=%k8s.ns.name
+        image=%container.image.repository)
+      priority: CRITICAL
+      tags: [kyverno_companion, host_namespace, mitre_privilege_escalation]

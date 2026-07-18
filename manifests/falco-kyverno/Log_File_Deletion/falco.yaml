@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-custom-rules
+  namespace: falco
+  labels:
+    app.kubernetes.io/part-of: falco
+    app.kubernetes.io/component: custom-rules
+data:
+  # -------------------------------------------------------------------------
+  # Original hello-world rules (preserved from existing ConfigMap)
+  # -------------------------------------------------------------------------
+  hello-world-rules.yaml: |-
+    - rule: Log File Deletion in Container
+      desc: >
+        Detects deletion of log files inside a container, which may
+        indicate an attacker covering their tracks.
+      condition: >
+        evt.type in (unlink, unlinkat, rename, renameat) and evt.dir = <
+        and container
+        and (fd.name startswith "/var/log/"
+          or fd.name endswith ".log"
+          or fd.name contains "syslog"
+          or fd.name contains "auth.log"
+          or fd.name contains "history")
+        and not proc.name in (logrotate, journald)
+      output: >
+        Log file deleted in container (file=%fd.name command=%proc.cmdline
+        pod=%k8s.pod.name ns=%k8s.ns.name user=%user.name)
+      priority: ERROR
+      tags: [runtime_only, log_tampering, mitre_defense_evasion]

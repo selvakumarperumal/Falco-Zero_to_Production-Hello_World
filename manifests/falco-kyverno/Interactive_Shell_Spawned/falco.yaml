@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-custom-rules
+  namespace: falco
+  labels:
+    app.kubernetes.io/part-of: falco
+    app.kubernetes.io/component: custom-rules
+data:
+  # -------------------------------------------------------------------------
+  # Original hello-world rules (preserved from existing ConfigMap)
+  # -------------------------------------------------------------------------
+  hello-world-rules.yaml: |-
+    - rule: Interactive Shell Spawned in Container
+      desc: >
+        Detects an interactive shell (bash, sh, zsh) spawned inside a
+        container. This is a common post-exploitation indicator.
+      condition: >
+        spawned_process and container
+        and proc.name in (bash, sh, zsh, ksh, csh, fish, dash)
+        and proc.tty != 0
+        and not k8s.ns.name in (kube-system, kyverno)
+      output: >
+        Interactive shell spawned in container (user=%user.name
+        shell=%proc.name command=%proc.cmdline pod=%k8s.pod.name
+        ns=%k8s.ns.name image=%container.image.repository)
+      priority: WARNING
+      tags: [runtime_only, shell, mitre_execution]

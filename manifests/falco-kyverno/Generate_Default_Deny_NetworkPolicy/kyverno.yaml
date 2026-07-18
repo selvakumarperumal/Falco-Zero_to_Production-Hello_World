@@ -1,0 +1,43 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: generate-default-deny-netpol
+  annotations:
+    policies.kyverno.io/title: Generate Default-Deny Network Policy
+    policies.kyverno.io/category: Network Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Automatically creates a default-deny NetworkPolicy in every new
+      namespace to enforce zero-trust networking.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  rules:
+    - name: generate-default-deny
+      match:
+        any:
+          - resources:
+              kinds:
+                - Namespace
+      exclude:
+        any:
+          - resources:
+              namespaces:
+                - kube-system
+                - kube-public
+                - kube-node-lease
+                - kyverno
+                - argocd
+                - falco
+      generate:
+        kind: NetworkPolicy
+        apiVersion: networking.k8s.io/v1
+        name: default-deny-all
+        namespace: "{{request.object.metadata.name}}"
+        synchronize: true
+        data:
+          spec:
+            podSelector: {}
+            policyTypes:
+              - Ingress
+              - Egress
