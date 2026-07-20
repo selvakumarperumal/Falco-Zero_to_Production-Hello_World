@@ -39,6 +39,7 @@ spec:
         - /spec
         - /status
         - /metadata/annotations
+        - /metadata/labels
   syncPolicy:
     automated:
       prune: true
