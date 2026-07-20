@@ -38,7 +38,7 @@ spec:
             replicaCount: 1
             redis:
               storageEnabled: {{ .Values.falco.falcosidekick.webui.redis.storageEnabled }}
-              storageClass: "gp3"
+              storageClass: {{ .Values.falco.falcosidekick.webui.redis.storageClassName | quote}}
               storageSize: {{ .Values.falco.falcosidekick.webui.redis.storageSize | quote}}
         tty: true
         resources:
