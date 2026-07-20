@@ -1,5 +1,5 @@
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: MutatingPolicy
 metadata:
   name: add-pss-labels
   annotations:
@@ -12,25 +12,17 @@ metadata:
   labels:
     app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  rules:
-    - name: add-pss-baseline
-      match:
-        any:
-          - resources:
-              kinds:
-                - Namespace
-      exclude:
-        any:
-          - resources:
-              namespaces:
-                - kube-system
-                - kube-public
-                - kube-node-lease
-      mutate:
-        patchStrategicMerge:
-          metadata:
-            labels:
-              pod-security.kubernetes.io/enforce: "baseline"
-              pod-security.kubernetes.io/enforce-version: "latest"
-              pod-security.kubernetes.io/warn: "restricted"
-              pod-security.kubernetes.io/warn-version: "latest"
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE]
+        resources: [namespaces]
+  mutations:
+    - patchStrategicMerge:
+        metadata:
+          labels:
+            pod-security.kubernetes.io/enforce: "baseline"
+            pod-security.kubernetes.io/enforce-version: "latest"
+            pod-security.kubernetes.io/warn: "restricted"
+            pod-security.kubernetes.io/warn-version: "latest"

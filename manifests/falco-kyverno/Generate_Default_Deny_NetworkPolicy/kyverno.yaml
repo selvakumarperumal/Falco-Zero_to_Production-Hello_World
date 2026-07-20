@@ -1,5 +1,5 @@
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: GeneratingPolicy
 metadata:
   name: generate-default-deny-netpol
   annotations:
@@ -12,32 +12,21 @@ metadata:
   labels:
     app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  rules:
-    - name: generate-default-deny
-      match:
-        any:
-          - resources:
-              kinds:
-                - Namespace
-      exclude:
-        any:
-          - resources:
-              namespaces:
-                - kube-system
-                - kube-public
-                - kube-node-lease
-                - kyverno
-                - argocd
-                - falco
-      generate:
-        kind: NetworkPolicy
-        apiVersion: networking.k8s.io/v1
-        name: default-deny-all
-        namespace: "{{request.object.metadata.name}}"
-        synchronize: true
-        data:
-          spec:
-            podSelector: {}
-            policyTypes:
-              - Ingress
-              - Egress
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE]
+        resources: [namespaces]
+  generate:
+    apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    name: default-deny-all
+    namespace: "{{ request.object.metadata.name }}"
+    synchronize: true
+    data:
+      spec:
+        podSelector: {}
+        policyTypes:
+          - Ingress
+          - Egress

@@ -1,24 +1,28 @@
 # =============================================================================
-# Kyverno Modern CEL Policies — Admission-Time Prevention & Governance
+# Kyverno Comprehensive Modern CEL Policies (policies.kyverno.io/v1)
 # =============================================================================
-# API Group: policies.kyverno.io/v1 (Kyverno 1.12+)
-# Modern, high-performance CEL-native policies replacing deprecated ClusterPolicy.
+# Modern, high-performance CEL-native policies for Kyverno v1.12+ / v1.18+
+# Replaces all deprecated ClusterPolicy & CleanupPolicy resources.
 #
-# This file includes examples for ALL Kyverno v1.12+ policy types:
-#  1. ValidatingPolicy        (CEL admission validation rules)
-#  2. MutatingPolicy          (Strategic merge & CEL mutation patches)
-#  3. GeneratingPolicy        (Automatic resource creation)
-#  4. DeletingPolicy          (Scheduled resource cleanup — replaces CleanupPolicy)
-#  5. ImageValidatingPolicy   (Sigstore/Cosign container image signature verification)
-#  6. CEL Libraries           (Extended functions: cidrContains, parseQuantity, isSemver)
+# Policy Types Covered in Detail:
+#  1. ValidatingPolicy        (Cluster-scoped CEL admission validations)
+#  2. NamespacedValidatingPolicy (Namespace-scoped CEL admission validations)
+#  3. MutatingPolicy          (Strategic Merge, JSON Patch, & CEL Mutations)
+#  4. NamespacedMutatingPolicy   (Namespace-scoped resource mutations)
+#  5. GeneratingPolicy        (Automatic Resource Generation for Namespaces)
+#  6. DeletingPolicy          (Scheduled Resource Cleanup & Garbage Collection)
+#  7. ImageValidatingPolicy   (Sigstore/Cosign Signature & Attestation Verification)
+#  8. CEL Extension Libraries (kyverno.parseQuantity, isSemver, cidrContains, parseJson)
 #
 # Apply: kubectl apply -f manifests/kyverno/kyverno-policies.yaml
 # Check: kubectl get validatingpolicies,mutatingpolicies,generatingpolicies,deletingpolicies,imagevalidatingpolicies
 # =============================================================================
 
-# -----------------------------------------------------------------------------
-# 1. ValidatingPolicy — Pod Security & Best Practices
-# -----------------------------------------------------------------------------
+# =============================================================================
+# SECTION 1: ValidatingPolicy (Admission Control & Guardrails)
+# =============================================================================
+
+# --- 1.1 Disallow Privileged Containers ---
 ---
 apiVersion: policies.kyverno.io/v1
 kind: ValidatingPolicy
@@ -46,8 +50,10 @@ spec:
     - message: "Privileged containers are not allowed."
       expression: >-
         !object.spec.containers.exists(c, has(c.securityContext) && has(c.securityContext.privileged) && c.securityContext.privileged == true) &&
-        !object.spec.?initContainers.orValue([]).exists(c, has(c.securityContext) && has(c.securityContext.privileged) && c.securityContext.privileged == true)
+        !object.spec.?initContainers.orValue([]).exists(c, has(c.securityContext) && has(c.securityContext.privileged) && c.securityContext.privileged == true) &&
+        !object.spec.?ephemeralContainers.orValue([]).exists(c, has(c.securityContext) && has(c.securityContext.privileged) && c.securityContext.privileged == true)
 
+# --- 1.2 Disallow Host Namespaces ---
 ---
 apiVersion: policies.kyverno.io/v1
 kind: ValidatingPolicy
@@ -77,6 +83,7 @@ spec:
         !(has(object.spec.hostIPC) && object.spec.hostIPC == true) &&
         !(has(object.spec.hostNetwork) && object.spec.hostNetwork == true)
 
+# --- 1.3 Require Non-Root User ---
 ---
 apiVersion: policies.kyverno.io/v1
 kind: ValidatingPolicy
@@ -105,6 +112,7 @@ spec:
         (has(object.spec.securityContext) && has(object.spec.securityContext.runAsNonRoot) && object.spec.securityContext.runAsNonRoot == true) ||
         object.spec.containers.all(c, has(c.securityContext) && has(c.securityContext.runAsNonRoot) && c.securityContext.runAsNonRoot == true)
 
+# --- 1.4 Disallow HostPath Volumes ---
 ---
 apiVersion: policies.kyverno.io/v1
 kind: ValidatingPolicy
@@ -132,22 +140,18 @@ spec:
       expression: >-
         !has(object.spec.volumes) || !object.spec.volumes.exists(v, has(v.hostPath))
 
-
-# -----------------------------------------------------------------------------
-# 2. ValidatingPolicy — Extended CEL Library Functions Example
-# -----------------------------------------------------------------------------
+# --- 1.5 Restrict Image Registries ---
 ---
 apiVersion: policies.kyverno.io/v1
 kind: ValidatingPolicy
 metadata:
-  name: validate-resource-quantities-and-cidr
+  name: restrict-image-registries
   annotations:
-    policies.kyverno.io/title: Validate Resource Quantities & CIDR Range
-    policies.kyverno.io/category: CEL Libraries & Advanced Validation
-    policies.kyverno.io/severity: medium
+    policies.kyverno.io/title: Restrict Image Registries
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: high
     policies.kyverno.io/description: >-
-      Uses Kyverno CEL extension functions (kyverno.parseQuantity, kyverno.cidrContains)
-      to enforce memory ceiling and restrict egress IP targets.
+      Images may only be pulled from approved registries.
   labels:
     app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
@@ -160,7 +164,165 @@ spec:
         operations: [CREATE, UPDATE]
         resources: [pods]
   validations:
-    - message: "Memory limit must not exceed 8Gi (8589934592 bytes)."
+    - message: "Images must come from an approved registry (ECR, ghcr.io, gcr.io, or registry.k8s.io)."
+      expression: >-
+        object.spec.containers.all(c,
+          c.image.contains('.dkr.ecr.') ||
+          c.image.startsWith('ghcr.io/') ||
+          c.image.startsWith('gcr.io/') ||
+          c.image.startsWith('registry.k8s.io/') ||
+          c.image.startsWith('docker.io/') ||
+          !c.image.contains('/')
+        )
+
+# --- 1.6 Disallow Latest Tag ---
+---
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: disallow-latest-tag
+  annotations:
+    policies.kyverno.io/title: Disallow Latest Tag
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Using the :latest tag makes deployments non-reproducible.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "An explicit image tag is required and must not be ':latest'."
+      expression: >-
+        object.spec.containers.all(c, !c.image.endsWith(':latest')) &&
+        object.spec.?initContainers.orValue([]).all(c, !c.image.endsWith(':latest'))
+
+# --- 1.7 Require Resource Limits ---
+---
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: require-resource-limits
+  annotations:
+    policies.kyverno.io/title: Require Resource Limits
+    policies.kyverno.io/category: Best Practices
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      All containers must define CPU and memory limits.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "CPU and memory limits are required for all containers."
+      expression: >-
+        object.spec.containers.all(c,
+          has(c.resources) &&
+          has(c.resources.limits) &&
+          has(c.resources.limits.cpu) &&
+          has(c.resources.limits.memory)
+        )
+
+# --- 1.8 Disallow NodePort Services ---
+---
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: disallow-nodeport-services
+  annotations:
+    policies.kyverno.io/title: Disallow NodePort Services
+    policies.kyverno.io/category: Network Security
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      NodePort services expose ports on every cluster node.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [services]
+  validations:
+    - message: "NodePort services are not allowed. Use LoadBalancer or ClusterIP."
+      expression: >-
+        !has(object.spec.type) || object.spec.type != 'NodePort'
+
+# --- 1.9 NamespacedValidatingPolicy Example (Deployment Replicas) ---
+---
+apiVersion: policies.kyverno.io/v1
+kind: NamespacedValidatingPolicy
+metadata:
+  name: check-deployment-replicas
+  namespace: production
+  annotations:
+    policies.kyverno.io/title: Require Minimum Replicas in Production
+    policies.kyverno.io/category: High Availability
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Deployments in production namespace must have at least 2 replicas.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["apps"]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [deployments]
+  validations:
+    - message: "Production deployments must specify at least 2 replicas for high availability."
+      expression: "object.spec.replicas >= 2"
+
+
+# =============================================================================
+# SECTION 2: CEL Extension Libraries (Advanced Parsing & Logic)
+# =============================================================================
+
+# --- 2.1 Validate Quantity, Versioning & CIDR Range ---
+---
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: validate-advanced-cel-functions
+  annotations:
+    policies.kyverno.io/title: Advanced CEL Functions Validation
+    policies.kyverno.io/category: CEL Extension Libraries
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Demonstrates kyverno.parseQuantity, kyverno.isSemver, and kyverno.isCidr functions.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "Container memory limit must not exceed 8Gi."
       expression: >-
         object.spec.containers.all(c,
           !has(c.resources) ||
@@ -170,9 +332,11 @@ spec:
         )
 
 
-# -----------------------------------------------------------------------------
-# 3. MutatingPolicy — Auto-inject Configurations & Labels
-# -----------------------------------------------------------------------------
+# =============================================================================
+# SECTION 3: MutatingPolicy & NamespacedMutatingPolicy
+# =============================================================================
+
+# --- 3.1 MutatingPolicy — Strategic Merge (Set Always Pull Policy) ---
 ---
 apiVersion: policies.kyverno.io/v1
 kind: MutatingPolicy
@@ -183,8 +347,7 @@ metadata:
     policies.kyverno.io/category: Supply Chain Security
     policies.kyverno.io/severity: low
     policies.kyverno.io/description: >-
-      Automatically sets imagePullPolicy to Always for containers using
-      the :latest tag.
+      Automatically sets imagePullPolicy to Always for containers using :latest tag.
   labels:
     app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
@@ -201,6 +364,7 @@ spec:
             - (image): "*:latest"
               imagePullPolicy: "Always"
 
+# --- 3.2 MutatingPolicy — Add Pod Security Labels to Namespaces ---
 ---
 apiVersion: policies.kyverno.io/v1
 kind: MutatingPolicy
@@ -211,7 +375,7 @@ metadata:
     policies.kyverno.io/category: Pod Security Standards
     policies.kyverno.io/severity: medium
     policies.kyverno.io/description: >-
-      Automatically adds Pod Security Standard labels to new namespaces.
+      Automatically injects Pod Security Standard labels to newly created namespaces.
   labels:
     app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
@@ -228,10 +392,43 @@ spec:
             pod-security.kubernetes.io/enforce: "baseline"
             pod-security.kubernetes.io/enforce-version: "latest"
 
+# --- 3.3 NamespacedMutatingPolicy — Inject Default Environment Variable ---
+---
+apiVersion: policies.kyverno.io/v1
+kind: NamespacedMutatingPolicy
+metadata:
+  name: inject-default-env-vars
+  namespace: default
+  annotations:
+    policies.kyverno.io/title: Inject Default Environment Variables
+    policies.kyverno.io/category: Configuration Governance
+    policies.kyverno.io/severity: low
+    policies.kyverno.io/description: >-
+      Injects CLUSTER_NAME environment variable into all pod containers in default namespace.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE]
+        resources: [pods]
+  mutations:
+    - patchStrategicMerge:
+        spec:
+          containers:
+            - name: "*"
+              env:
+                - name: CLUSTER_NAME
+                  value: "production-eks"
 
-# -----------------------------------------------------------------------------
-# 4. GeneratingPolicy — Zero-Trust Default Network Policies
-# -----------------------------------------------------------------------------
+
+# =============================================================================
+# SECTION 4: GeneratingPolicy & NamespacedGeneratingPolicy
+# =============================================================================
+
+# --- 4.1 GeneratingPolicy — Auto-create Default Deny NetworkPolicy ---
 ---
 apiVersion: policies.kyverno.io/v1
 kind: GeneratingPolicy
@@ -242,8 +439,7 @@ metadata:
     policies.kyverno.io/category: Network Security
     policies.kyverno.io/severity: high
     policies.kyverno.io/description: >-
-      Automatically creates a default-deny NetworkPolicy in every new
-      namespace to enforce zero-trust networking.
+      Automatically creates a default-deny NetworkPolicy in every new namespace.
   labels:
     app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
@@ -266,10 +462,48 @@ spec:
           - Ingress
           - Egress
 
+# --- 4.2 GeneratingPolicy — Auto-create ResourceQuota for New Namespaces ---
+---
+apiVersion: policies.kyverno.io/v1
+kind: GeneratingPolicy
+metadata:
+  name: generate-namespace-resource-quota
+  annotations:
+    policies.kyverno.io/title: Generate Default ResourceQuota
+    policies.kyverno.io/category: Resource Management
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Automatically provisions a standard ResourceQuota whenever a new namespace is created.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE]
+        resources: [namespaces]
+  generate:
+    apiVersion: v1
+    kind: ResourceQuota
+    name: default-resource-quota
+    namespace: "{{ request.object.metadata.name }}"
+    synchronize: true
+    data:
+      spec:
+        hard:
+          requests.cpu: "4"
+          requests.memory: "8Gi"
+          limits.cpu: "8"
+          limits.memory: "16Gi"
+          pods: "20"
 
-# -----------------------------------------------------------------------------
-# 5. DeletingPolicy — Scheduled Resource Cleanup (Replaces CleanupPolicy)
-# -----------------------------------------------------------------------------
+
+# =============================================================================
+# SECTION 5: DeletingPolicy (Scheduled Cleanup & Garbage Collection)
+# =============================================================================
+
+# --- 5.1 DeletingPolicy — Delete Completed Jobs Older Than 24h ---
 ---
 apiVersion: policies.kyverno.io/v1
 kind: DeletingPolicy
@@ -295,10 +529,39 @@ spec:
         has(object.status.completionTime) &&
         time.now().sub(time.parseIso8601(object.status.completionTime)) > duration('24h')
 
+# --- 5.2 DeletingPolicy — Delete Evicted & Failed Pods ---
+---
+apiVersion: policies.kyverno.io/v1
+kind: DeletingPolicy
+metadata:
+  name: delete-evicted-failed-pods
+  annotations:
+    policies.kyverno.io/title: Delete Evicted & Failed Pods
+    policies.kyverno.io/category: Garbage Collection & Hygiene
+    policies.kyverno.io/severity: low
+    policies.kyverno.io/description: >-
+      Automatically purges pods in Failed or Evicted state older than 1 hour.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  schedule: "*/30 * * * *" # Runs every 30 minutes
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods"]
+  conditions:
+    - expression: >-
+        has(object.status.phase) &&
+        object.status.phase == 'Failed' &&
+        time.now().sub(time.parseIso8601(object.metadata.creationTimestamp)) > duration('1h')
 
-# -----------------------------------------------------------------------------
-# 6. ImageValidatingPolicy — Sigstore / Cosign Image Verification
-# -----------------------------------------------------------------------------
+
+# =============================================================================
+# SECTION 6: ImageValidatingPolicy (Sigstore/Cosign Image Verification)
+# =============================================================================
+
+# --- 6.1 ImageValidatingPolicy — Verify Cosign Signature & Attestations ---
 ---
 apiVersion: policies.kyverno.io/v1
 kind: ImageValidatingPolicy
