@@ -1,5 +1,5 @@
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: disallow-host-namespaces
   annotations:
@@ -11,18 +11,17 @@ metadata:
   labels:
     app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Enforce
-  rules:
-    - name: deny-host-namespaces
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      validate:
-        message: "Host PID, IPC, and network namespaces are not allowed."
-        pattern:
-          spec:
-            =(hostPID): "false"
-            =(hostIPC): "false"
-            =(hostNetwork): "false"
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "Host PID, IPC, and network namespaces are not allowed."
+      expression: >-
+        !(has(object.spec.hostPID) && object.spec.hostPID == true) &&
+        !(has(object.spec.hostIPC) && object.spec.hostIPC == true) &&
+        !(has(object.spec.hostNetwork) && object.spec.hostNetwork == true)
