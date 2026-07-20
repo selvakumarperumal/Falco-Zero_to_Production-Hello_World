@@ -31,7 +31,6 @@ falco:
       redis:
         storageEnabled: true
         storageSize: "1Gi"
-        storageClassName: "gp3"
 
   # Falco engine configuration
   falco:
