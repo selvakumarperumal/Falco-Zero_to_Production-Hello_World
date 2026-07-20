@@ -19,6 +19,8 @@ spec:
     targetRevision: {{ .Values.kyverno.chart_version }}
     helm:
       values: |
+        webhookLabels:
+          app.kubernetes.io/managed-by: argocd
         crds:
           migration:
             enabled: false
@@ -34,14 +36,6 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: {{ .Values.kyverno.namespace }}
-  ignoreDifferences:
-    - group: apiextensions.k8s.io
-      kind: CustomResourceDefinition
-      jsonPointers:
-        - /spec
-        - /status
-        - /metadata/annotations
-        - /metadata/labels
   syncPolicy:
     automated:
       prune: true
@@ -49,5 +43,3 @@ spec:
     syncOptions:
       - CreateNamespace=true
       - ServerSideApply=true
-      - RespectIgnoreDifferences=true
-      - Replace=true
