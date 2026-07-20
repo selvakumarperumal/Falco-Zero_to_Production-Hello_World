@@ -1,16 +1,18 @@
 # =============================================================================
 # Falco Companion Rules — Runtime Detection for Kyverno Policies
 # =============================================================================
-# These rules detect runtime behaviors that correspond to the security concerns
-# addressed by the Kyverno admission policies in kyverno-policies.yaml.
+# Built against official Falco Rules Engine Documentation:
+#  - Default Macros:    https://falco.org/docs/reference/rules/default-macros/
+#  - Macro Overrides:   https://falco.org/docs/reference/rules/macros-override/
+#  - Supported Events:  https://falco.org/docs/reference/rules/supported-events/
+#  - Supported Fields:  https://falco.org/docs/reference/rules/supported-fields/
+#  - Rule Structure:    https://falco.org/docs/reference/rules/examples/
+#  - Default Ruleset:   https://falco.org/docs/reference/rules/default-rules/
 #
 # Together, Kyverno (prevention) + Falco (detection) = defense in depth.
 #
 # Documentation: docs/kyverno-falco-guide.md
 # Companion Kyverno policies: manifests/kyverno/kyverno-policies.yaml
-#
-# Apply: kubectl apply -f manifests/falco/falco-kyverno-companion-rules.yaml
-# Falco auto-reloads via Stakater Reloader.
 # =============================================================================
 ---
 apiVersion: v1
@@ -23,16 +25,16 @@ metadata:
     app.kubernetes.io/component: custom-rules
 data:
   # -------------------------------------------------------------------------
-  # Original hello-world rules (preserved from existing ConfigMap)
+  # Hello-World Application Runtime Rules
   # -------------------------------------------------------------------------
   hello-world-rules.yaml: |-
     - rule: Unexpected Shell in Hello World Pod
-      desc: >
-        Detects an interactive shell spawned inside the hello-world pod.
+      desc: Detects an interactive shell spawned inside the hello-world workload pod.
+      source: syscall
       condition: >
-        spawned_process and
+        evt.type = execve and evt.dir = < and
         container and
-        k8s.pod.name = "hello-world" and
+        k8s.pod.name startswith "hello-world" and
         proc.name in (bash, sh, zsh)
       output: >
         Shell spawned in hello-world pod (user=%user.name command=%proc.cmdline
@@ -41,11 +43,11 @@ data:
       tags: [demo, shell, mitre_execution]
 
   # -------------------------------------------------------------------------
-  # Kyverno companion rules — runtime detection layer
+  # Kyverno Companion Rules — Custom Rules & Macro Overrides
   # -------------------------------------------------------------------------
   kyverno-companion-rules.yaml: |-
     # =======================================================================
-    # Lists — Reusable named arrays
+    # 1. Custom Lists — Appended to Default Falco Ruleset
     # =======================================================================
 
     - list: approved_registries
@@ -54,6 +56,7 @@ data:
         - ghcr.io
         - gcr.io
         - registry.k8s.io
+        - docker.io
 
     - list: sensitive_host_paths
       items:
@@ -63,13 +66,6 @@ data:
         - /var/run/containerd
         - /root/.ssh
         - /root/.kube
-        - /home
-
-    - list: sensitive_file_paths
-      items:
-        - /etc/shadow
-        - /etc/gshadow
-        - /etc/master.passwd
 
     - list: crypto_mining_processes
       items:
@@ -97,431 +93,146 @@ data:
         - gulf.moneroocean.stream
 
     # =======================================================================
-    # Example 1 — Privileged Container Started
-    # Companion to: Kyverno disallow-privileged-containers
+    # 2. Macro Overrides (using append: true)
     # =======================================================================
 
-    - rule: Privileged Container Started
-      desc: >
-        Detects a container that was started with privileged mode.
-        This should never happen if Kyverno is enforcing, so this alert
-        means either Kyverno was bypassed or is in Audit mode.
+    - macro: user_known_untrusted_registries
+      append: true
       condition: >
-        container_started and container and container.privileged = true
+        or (container and not container.image.repository in (approved_registries))
+
+    # =======================================================================
+    # 3. Security Rules
+    # =======================================================================
+
+    # --- Rule 1: Privileged Container Started ---
+    - rule: Privileged Container Started
+      desc: Detects a container spawned with host privileged mode enabled.
+      source: syscall
+      condition: >
+        evt.type = execve and evt.dir = < and
+        container and container.privileged = true
       output: >
         Privileged container started (user=%user.name pod=%k8s.pod.name
         ns=%k8s.ns.name image=%container.image.repository)
       priority: CRITICAL
       tags: [kyverno_companion, privileged, mitre_privilege_escalation]
 
-    # =======================================================================
-    # Example 2 — Container Using Host Namespace
-    # Companion to: Kyverno disallow-host-namespaces
-    # =======================================================================
-
+    # --- Rule 2: Container Using Host Namespace ---
     - rule: Container Using Host Namespace
-      desc: >
-        Detects a container running with host PID or network namespace.
+      desc: Detects a container sharing host PID or network namespaces.
+      source: syscall
       condition: >
-        container_started and container
-        and (container.privileged = true or k8s.pod.name != "")
-        and (evt.arg.flags contains "CLONE_NEWPID"
-          or evt.arg.flags contains "CLONE_NEWNET")
+        evt.type = execve and evt.dir = < and
+        container and
+        (evt.arg.flags contains "CLONE_NEWPID" or evt.arg.flags contains "CLONE_NEWNET")
       output: >
-        Container uses host namespace (pod=%k8s.pod.name ns=%k8s.ns.name
-        image=%container.image.repository)
+        Container using host namespace (user=%user.name pod=%k8s.pod.name
+        ns=%k8s.ns.name image=%container.image.repository)
       priority: CRITICAL
       tags: [kyverno_companion, host_namespace, mitre_privilege_escalation]
 
-    # =======================================================================
-    # Example 3 — Container Running as Root User
-    # Companion to: Kyverno require-run-as-non-root
-    # =======================================================================
-
+    # --- Rule 3: Container Running as Root User ---
     - rule: Container Running as Root User
-      desc: >
-        Detects a process running as root (UID 0) inside a container.
+      desc: Detects a process spawned with UID 0 (root) inside an application container.
+      source: syscall
       condition: >
-        spawned_process and container
-        and user.uid = 0
-        and not k8s.ns.name in (kube-system, kyverno)
+        evt.type = execve and evt.dir = < and
+        container and user.uid = 0 and
+        not k8s.ns.name in (kube-system, kyverno, falco)
       output: >
         Process running as root in container (user=%user.name uid=%user.uid
         command=%proc.cmdline pod=%k8s.pod.name ns=%k8s.ns.name)
       priority: WARNING
       tags: [kyverno_companion, root_user, mitre_privilege_escalation]
 
-    # =======================================================================
-    # Example 4 — Container from Untrusted Registry
-    # Companion to: Kyverno restrict-image-registries
-    # =======================================================================
-
+    # --- Rule 4: Container from Untrusted Registry ---
     - rule: Container from Untrusted Registry
-      desc: >
-        Detects a running container whose image was pulled from a registry
-        not in the approved list.
+      desc: Detects a running container whose image originates from an unapproved registry.
+      source: syscall
       condition: >
-        container_started and container
-        and not container.image.repository contains "dkr.ecr"
-        and not container.image.repository contains "ghcr.io"
-        and not container.image.repository contains "gcr.io"
-        and not container.image.repository contains "registry.k8s.io"
+        evt.type = execve and evt.dir = < and
+        container and
+        not (container.image.repository contains "dkr.ecr" or
+             container.image.repository startswith "ghcr.io/" or
+             container.image.repository startswith "gcr.io/" or
+             container.image.repository startswith "registry.k8s.io/")
       output: >
-        Container from untrusted registry
-        (image=%container.image.repository:%container.image.tag
+        Container from untrusted registry (image=%container.image.repository:%container.image.tag
         pod=%k8s.pod.name ns=%k8s.ns.name)
       priority: ERROR
       tags: [kyverno_companion, supply_chain, mitre_initial_access]
 
-    # =======================================================================
-    # Example 5 — Container Running with Latest Tag
-    # Companion to: Kyverno disallow-latest-tag
-    # =======================================================================
-
+    # --- Rule 5: Container Running with Latest Tag ---
     - rule: Container Running with Latest Tag
-      desc: >
-        Detects a running container using the :latest image tag.
+      desc: Detects a container executed using unpinned :latest tag.
+      source: syscall
       condition: >
-        container_started and container
-        and (container.image.tag = "latest" or container.image.tag = "")
+        evt.type = execve and evt.dir = < and
+        container and
+        (container.image.tag = "latest" or container.image.tag = "")
       output: >
-        Container running with :latest tag
-        (image=%container.image.repository:%container.image.tag
+        Container running with :latest tag (image=%container.image.repository:%container.image.tag
         pod=%k8s.pod.name ns=%k8s.ns.name)
       priority: NOTICE
       tags: [kyverno_companion, latest_tag, supply_chain]
 
-    # =======================================================================
-    # Example 6 — Container Resource Exhaustion Behavior
-    # Companion to: Kyverno require-resource-limits
-    # =======================================================================
-
-    - rule: Container Resource Exhaustion Behavior
-      desc: >
-        Detects a container process consuming excessive resources,
-        potentially indicating a fork bomb or resource exhaustion attack.
-      condition: >
-        spawned_process and container
-        and proc.name in (stress, stress-ng, yes, dd)
-        and not k8s.ns.name in (kube-system)
-      output: >
-        Resource exhaustion tool detected (command=%proc.cmdline
-        pod=%k8s.pod.name ns=%k8s.ns.name image=%container.image.repository)
-      priority: WARNING
-      tags: [kyverno_companion, resource_abuse, mitre_impact]
-
-    # =======================================================================
-    # Example 7 — Write to Container Root Filesystem
-    # Companion to: Kyverno require-readonly-rootfs
-    # =======================================================================
-
-    - rule: Write to Container Root Filesystem
-      desc: >
-        Detects file writes to the container root filesystem, excluding
-        known-safe paths like /tmp and /proc.
-      condition: >
-        evt.type in (open, openat, openat2) and evt.dir = <
-        and container
-        and evt.is_open_write = true
-        and not fd.name startswith "/tmp"
-        and not fd.name startswith "/proc"
-        and not fd.name startswith "/dev"
-        and not fd.name startswith "/sys"
-        and fd.name != ""
-        and not k8s.ns.name in (kube-system, kyverno)
-      output: >
-        File written to container root fs (file=%fd.name command=%proc.cmdline
-        pod=%k8s.pod.name ns=%k8s.ns.name)
-      priority: WARNING
-      tags: [kyverno_companion, rootfs_write, mitre_persistence]
-
-    # =======================================================================
-    # Example 8 — Dangerous Capability Used at Runtime
-    # Companion to: Kyverno drop-all-capabilities
-    # =======================================================================
-
-    - rule: Dangerous Capability Used at Runtime
-      desc: >
-        Detects a process attempting to use dangerous Linux capabilities
-        such as SYS_ADMIN, SYS_PTRACE, or NET_RAW.
-      condition: >
-        spawned_process and container
-        and (proc.name = "nsenter" or proc.name = "unshare"
-          or proc.cmdline contains "capsh"
-          or proc.cmdline contains "--cap-add")
-      output: >
-        Dangerous capability usage detected (command=%proc.cmdline
-        user=%user.name pod=%k8s.pod.name ns=%k8s.ns.name)
-      priority: WARNING
-      tags: [kyverno_companion, capabilities, mitre_privilege_escalation]
-
-    # =======================================================================
-    # Example 9 — Setuid or Setgid Binary Executed in Container
-    # Companion to: Kyverno disallow-privilege-escalation
-    # =======================================================================
-
-    - rule: Setuid or Setgid Binary Executed in Container
-      desc: >
-        Detects execution of setuid/setgid binaries inside a container,
-        which can be used for privilege escalation.
-      condition: >
-        spawned_process and container
-        and (proc.name in (sudo, su, newgrp, chsh, chfn, passwd)
-          or proc.name = "pkexec")
-        and not k8s.ns.name in (kube-system)
-      output: >
-        Setuid/setgid binary executed (command=%proc.cmdline user=%user.name
-        pod=%k8s.pod.name ns=%k8s.ns.name image=%container.image.repository)
-      priority: ERROR
-      tags: [kyverno_companion, privilege_escalation, mitre_privilege_escalation]
-
-    # =======================================================================
-    # Example 10 — Sensitive Host Path Accessed from Container
-    # Companion to: Kyverno disallow-hostpath-volumes
-    # =======================================================================
-
+    # --- Rule 6: Sensitive Host Path Accessed from Container ---
     - rule: Sensitive Host Path Accessed from Container
-      desc: >
-        Detects a container accessing sensitive paths on the host
-        filesystem via a hostPath mount.
+      desc: Detects file open events targeting sensitive host filesystem paths.
+      source: syscall
       condition: >
-        evt.type in (open, openat, openat2) and evt.dir = <
-        and container
-        and (fd.name startswith "/etc/shadow"
-          or fd.name startswith "/etc/kubernetes"
-          or fd.name startswith "/var/run/docker.sock"
-          or fd.name startswith "/root/.ssh"
-          or fd.name startswith "/root/.kube")
+        evt.type in (open, openat, openat2) and evt.dir = < and
+        container and
+        fd.name in (sensitive_host_paths)
       output: >
         Sensitive host path accessed from container (file=%fd.name
         command=%proc.cmdline pod=%k8s.pod.name ns=%k8s.ns.name)
       priority: CRITICAL
       tags: [kyverno_companion, hostpath, mitre_credential_access]
 
-    # =======================================================================
-    # Example 11 — Service Account Token Accessed in Container
-    # Companion to: Kyverno disallow-default-sa-token
-    # =======================================================================
-
+    # --- Rule 7: Service Account Token Accessed in Container ---
     - rule: Service Account Token Accessed in Container
-      desc: >
-        Detects a container process reading the Kubernetes service account
-        token file, which could indicate credential harvesting.
+      desc: Detects process access to auto-mounted service account tokens.
+      source: syscall
       condition: >
-        evt.type in (open, openat, openat2) and evt.dir = <
-        and container
-        and fd.name contains "/var/run/secrets/kubernetes.io/serviceaccount"
-        and not k8s.ns.name in (kube-system, kyverno)
-        and not proc.name in (pause, tini)
+        evt.type in (open, openat, openat2) and evt.dir = < and
+        container and evt.is_open_read = true and
+        fd.name contains "/var/run/secrets/kubernetes.io/serviceaccount" and
+        not k8s.ns.name in (kube-system, kyverno, falco)
       output: >
         Service account token accessed (file=%fd.name command=%proc.cmdline
         pod=%k8s.pod.name ns=%k8s.ns.name user=%user.name)
       priority: WARNING
       tags: [kyverno_companion, sa_token, mitre_credential_access]
 
-    # =======================================================================
-    # Example 12 — Unexpected Listening Port in Container
-    # Companion to: Kyverno disallow-nodeport-services
-    # =======================================================================
-
-    - rule: Unexpected Listening Port in Container
-      desc: >
-        Detects a container process binding to a port outside the expected
-        application range (common for backdoors and reverse shells).
-      condition: >
-        evt.type in (bind, listen) and evt.dir = <
-        and container
-        and fd.sport != 0
-        and not fd.sport in (80, 443, 8080, 8443, 3000, 5000, 9090)
-        and not k8s.ns.name in (kube-system, kyverno)
-      output: >
-        Unexpected port binding in container (port=%fd.sport
-        command=%proc.cmdline pod=%k8s.pod.name ns=%k8s.ns.name)
-      priority: NOTICE
-      tags: [kyverno_companion, network, mitre_command_and_control]
-
-    # =======================================================================
-    # Example 13 — Container Process Crash Loop Detected
-    # Companion to: Kyverno require-pod-probes
-    # =======================================================================
-
-    - rule: Container Process Crash Loop Detected
-      desc: >
-        Detects repeated process crashes in a container, which may
-        indicate an unhealthy application bypassing health probe checks.
-      condition: >
-        spawned_process and container
-        and proc.name in (sh, bash)
-        and proc.cmdline contains "exit"
-        and proc.duration <= 5000000000
-      output: >
-        Rapid process restart detected (command=%proc.cmdline
-        pod=%k8s.pod.name ns=%k8s.ns.name)
-      priority: NOTICE
-      tags: [kyverno_companion, health, reliability]
-
-    # =======================================================================
-    # Example 15 — Unexpected Outbound Connection from Container
-    # Companion to: Kyverno generate-default-deny-netpol
-    # =======================================================================
-
-    - rule: Unexpected Outbound Connection from Container
-      desc: >
-        Detects outbound network connections to destinations outside
-        the cluster internal network ranges.
-      condition: >
-        evt.type = connect and evt.dir = <
-        and container
-        and fd.typechar = 4
-        and fd.ip != "0.0.0.0"
-        and not fd.sip in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
-        and not k8s.ns.name in (kube-system, kyverno)
-      output: >
-        Unexpected outbound connection (connection=%fd.name
-        command=%proc.cmdline pod=%k8s.pod.name ns=%k8s.ns.name)
-      priority: WARNING
-      tags: [kyverno_companion, network, mitre_exfiltration]
-
-    # =======================================================================
-    # Example 18 — Interactive Shell Spawned in Container
-    # Runtime-only (no Kyverno admission-time equivalent)
-    # =======================================================================
-
+    # --- Rule 8: Interactive Shell Spawned in Container ---
     - rule: Interactive Shell Spawned in Container
-      desc: >
-        Detects an interactive shell (bash, sh, zsh) spawned inside a
-        container. This is a common post-exploitation indicator.
+      desc: Detects interactive shell invocation inside a running container.
+      source: syscall
       condition: >
-        spawned_process and container
-        and proc.name in (bash, sh, zsh, ksh, csh, fish, dash)
-        and proc.tty != 0
-        and not k8s.ns.name in (kube-system, kyverno)
+        evt.type = execve and evt.dir = < and
+        container and proc.name in (bash, sh, zsh, ksh, csh, fish, dash) and
+        proc.tty != 0 and
+        not k8s.ns.name in (kube-system, kyverno, falco)
       output: >
-        Interactive shell spawned in container (user=%user.name
-        shell=%proc.name command=%proc.cmdline pod=%k8s.pod.name
-        ns=%k8s.ns.name image=%container.image.repository)
+        Interactive shell spawned in container (user=%user.name shell=%proc.name
+        command=%proc.cmdline pod=%k8s.pod.name ns=%k8s.ns.name image=%container.image.repository)
       priority: WARNING
       tags: [runtime_only, shell, mitre_execution]
 
-    # =======================================================================
-    # Example 19 — Crypto Mining Process Detected
-    # Runtime-only (no Kyverno admission-time equivalent)
-    # =======================================================================
-
+    # --- Rule 9: Crypto Mining Process Detected ---
     - rule: Crypto Mining Process Detected
-      desc: >
-        Detects known cryptocurrency mining processes or connections to
-        known mining pool domains.
+      desc: Detects execution of known cryptocurrency miners or stratum pool traffic.
+      source: syscall
       condition: >
-        spawned_process and container
-        and (proc.name in (crypto_mining_processes)
-          or proc.cmdline contains "stratum+tcp://"
-          or proc.cmdline contains "stratum+ssl://"
-          or proc.cmdline icontains "cryptonight"
-          or proc.cmdline icontains "randomx")
+        evt.type = execve and evt.dir = < and
+        container and
+        (proc.name in (crypto_mining_processes) or
+         proc.cmdline contains "stratum+tcp://" or
+         proc.cmdline contains "stratum+ssl://")
       output: >
-        Crypto mining detected (command=%proc.cmdline pod=%k8s.pod.name
+        Crypto mining process detected (command=%proc.cmdline pod=%k8s.pod.name
         ns=%k8s.ns.name image=%container.image.repository user=%user.name)
       priority: CRITICAL
       tags: [runtime_only, crypto_mining, mitre_resource_hijacking]
-
-    # =======================================================================
-    # Example 20 — Sensitive File Read in Container
-    # Runtime-only (no Kyverno admission-time equivalent)
-    # =======================================================================
-
-    - rule: Sensitive File Read in Container
-      desc: >
-        Detects access to sensitive credential files from inside a
-        container.
-      condition: >
-        evt.type in (open, openat, openat2) and evt.dir = <
-        and container
-        and evt.is_open_read = true
-        and (fd.name in (/etc/shadow, /etc/gshadow, /etc/master.passwd)
-          or fd.name endswith ".pem"
-          or fd.name endswith ".key"
-          or fd.name endswith ".p12"
-          or fd.name endswith ".pfx"
-          or fd.name contains "id_rsa"
-          or fd.name contains "id_ed25519")
-        and not proc.name in (sshd, ssh-agent)
-      output: >
-        Sensitive file read in container (file=%fd.name
-        command=%proc.cmdline pod=%k8s.pod.name ns=%k8s.ns.name
-        user=%user.name)
-      priority: ERROR
-      tags: [runtime_only, credential_access, mitre_credential_access]
-
-    # =======================================================================
-    # Example 21 — Log File Deletion in Container
-    # Runtime-only (no Kyverno admission-time equivalent)
-    # =======================================================================
-
-    - rule: Log File Deletion in Container
-      desc: >
-        Detects deletion of log files inside a container, which may
-        indicate an attacker covering their tracks.
-      condition: >
-        evt.type in (unlink, unlinkat, rename, renameat) and evt.dir = <
-        and container
-        and (fd.name startswith "/var/log/"
-          or fd.name endswith ".log"
-          or fd.name contains "syslog"
-          or fd.name contains "auth.log"
-          or fd.name contains "history")
-        and not proc.name in (logrotate, journald)
-      output: >
-        Log file deleted in container (file=%fd.name command=%proc.cmdline
-        pod=%k8s.pod.name ns=%k8s.ns.name user=%user.name)
-      priority: ERROR
-      tags: [runtime_only, log_tampering, mitre_defense_evasion]
-
-    # =======================================================================
-    # Example 22 — Symlink Created to Sensitive Path
-    # Runtime-only (no Kyverno admission-time equivalent)
-    # =======================================================================
-
-    - rule: Symlink Created to Sensitive Path
-      desc: >
-        Detects creation of symbolic links pointing to sensitive paths,
-        which is a common container escape technique (CVE-2021-25741).
-      condition: >
-        evt.type in (symlink, symlinkat) and evt.dir = <
-        and container
-        and (evt.arg.target startswith "/etc/"
-          or evt.arg.target startswith "/proc/"
-          or evt.arg.target startswith "/sys/"
-          or evt.arg.target startswith "/var/run/")
-      output: >
-        Symlink to sensitive path created (target=%evt.arg.target
-        link=%fd.name command=%proc.cmdline pod=%k8s.pod.name
-        ns=%k8s.ns.name)
-      priority: CRITICAL
-      tags: [runtime_only, symlink_attack, mitre_privilege_escalation]
-
-    # =======================================================================
-    # Example 23 — Reverse Shell Detected in Container
-    # Runtime-only (no Kyverno admission-time equivalent)
-    # =======================================================================
-
-    - rule: Reverse Shell Detected in Container
-      desc: >
-        Detects processes commonly used to establish reverse shells,
-        including netcat, bash redirections, and scripting language
-        one-liners.
-      condition: >
-        spawned_process and container
-        and (proc.name in (nc, ncat, netcat, nmap, socat)
-          or (proc.name = "bash" and proc.cmdline contains "/dev/tcp/")
-          or (proc.name = "python" and proc.cmdline contains "socket")
-          or (proc.name = "python3" and proc.cmdline contains "socket")
-          or (proc.name = "perl" and proc.cmdline contains "socket")
-          or (proc.name = "ruby" and proc.cmdline contains "TCPSocket")
-          or (proc.name = "php" and proc.cmdline contains "fsockopen"))
-      output: >
-        Possible reverse shell detected (command=%proc.cmdline
-        pod=%k8s.pod.name ns=%k8s.ns.name
-        image=%container.image.repository user=%user.name)
-      priority: CRITICAL
-      tags: [runtime_only, reverse_shell, mitre_command_and_control]

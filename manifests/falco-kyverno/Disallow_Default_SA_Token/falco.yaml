@@ -7,20 +7,15 @@ metadata:
     app.kubernetes.io/part-of: falco
     app.kubernetes.io/component: custom-rules
 data:
-  # -------------------------------------------------------------------------
-  # Original hello-world rules (preserved from existing ConfigMap)
-  # -------------------------------------------------------------------------
-  hello-world-rules.yaml: |-
+  falco-kyverno-rules.yaml: |-
     - rule: Service Account Token Accessed in Container
-      desc: >
-        Detects a container process reading the Kubernetes service account
-        token file, which could indicate credential harvesting.
+      desc: Detects process access to auto-mounted service account tokens.
+      source: syscall
       condition: >
-        evt.type in (open, openat, openat2) and evt.dir = <
-        and container
-        and fd.name contains "/var/run/secrets/kubernetes.io/serviceaccount"
-        and not k8s.ns.name in (kube-system, kyverno)
-        and not proc.name in (pause, tini)
+        evt.type in (open, openat, openat2) and evt.dir = < and
+        container and evt.is_open_read = true and
+        fd.name contains "/var/run/secrets/kubernetes.io/serviceaccount" and
+        not k8s.ns.name in (kube-system, kyverno, falco)
       output: >
         Service account token accessed (file=%fd.name command=%proc.cmdline
         pod=%k8s.pod.name ns=%k8s.ns.name user=%user.name)

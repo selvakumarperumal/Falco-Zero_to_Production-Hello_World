@@ -7,17 +7,14 @@ metadata:
     app.kubernetes.io/part-of: falco
     app.kubernetes.io/component: custom-rules
 data:
-  # -------------------------------------------------------------------------
-  # Original hello-world rules (preserved from existing ConfigMap)
-  # -------------------------------------------------------------------------
-  hello-world-rules.yaml: |-
+  falco-kyverno-rules.yaml: |-
     - rule: Container Running as Root User
-      desc: >
-        Detects a process running as root (UID 0) inside a container.
+      desc: Detects a process spawned with UID 0 (root) inside an application container.
+      source: syscall
       condition: >
-        spawned_process and container
-        and user.uid = 0
-        and not k8s.ns.name in (kube-system, kyverno)
+        evt.type = execve and evt.dir = < and
+        container and user.uid = 0 and
+        not k8s.ns.name in (kube-system, kyverno, falco)
       output: >
         Process running as root in container (user=%user.name uid=%user.uid
         command=%proc.cmdline pod=%k8s.pod.name ns=%k8s.ns.name)
