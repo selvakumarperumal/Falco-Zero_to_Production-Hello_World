@@ -166,8 +166,8 @@ All policies and rules below are also available as deployable manifests:
 #### Kyverno Policy (Prevention)
 
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: disallow-privileged-containers
   annotations:
@@ -176,29 +176,21 @@ metadata:
     policies.kyverno.io/severity: high
     policies.kyverno.io/description: >-
       Privileged containers have full access to the host. This policy
-      ensures that the `privileged` flag is never set to `true`.
+      ensures that the privileged flag is never set to true.
 spec:
-  validationFailureAction: Enforce
-  rules:
-    - name: deny-privileged
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      validate:
-        message: "Privileged containers are not allowed."
-        pattern:
-          spec:
-            containers:
-              - securityContext:
-                  privileged: "false"
-            =(initContainers):
-              - securityContext:
-                  privileged: "false"
-            =(ephemeralContainers):
-              - securityContext:
-                  privileged: "false"
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "Privileged containers are not allowed."
+      expression: >-
+        !object.spec.containers.exists(c, has(c.securityContext) && has(c.securityContext.privileged) && c.securityContext.privileged == true) &&
+        !object.spec.?initContainers.orValue([]).exists(c, has(c.securityContext) && has(c.securityContext.privileged) && c.securityContext.privileged == true)
 ```
 
 **What this does:** Rejects any Pod that sets `privileged: true` on *any* container — regular, init, or ephemeral. The `=(...)` syntax means "if this field exists, validate it" — it won't fail just because there are no initContainers.
@@ -231,8 +223,8 @@ spec:
 #### Kyverno Policy (Prevention)
 
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: disallow-host-namespaces
   annotations:
@@ -240,23 +232,22 @@ metadata:
     policies.kyverno.io/category: Pod Security Standards (Baseline)
     policies.kyverno.io/severity: high
     policies.kyverno.io/description: >-
-      Containers must not share the host's PID, IPC, or network namespaces.
+      Containers must not share the host PID, IPC, or network namespaces.
 spec:
-  validationFailureAction: Enforce
-  rules:
-    - name: deny-host-namespaces
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      validate:
-        message: "Host PID, IPC, and network namespaces are not allowed."
-        pattern:
-          spec:
-            =(hostPID): "false"
-            =(hostIPC): "false"
-            =(hostNetwork): "false"
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "Host PID, IPC, and network namespaces are not allowed."
+      expression: >-
+        !(has(object.spec.hostPID) && object.spec.hostPID == true) &&
+        !(has(object.spec.hostIPC) && object.spec.hostIPC == true) &&
+        !(has(object.spec.hostNetwork) && object.spec.hostNetwork == true)
 ```
 
 #### Falco Rule (Detection)
