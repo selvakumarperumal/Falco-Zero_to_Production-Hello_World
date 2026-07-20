@@ -1,5 +1,5 @@
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: disallow-privileged-containers
   annotations:
@@ -12,24 +12,17 @@ metadata:
   labels:
     app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Enforce
-  rules:
-    - name: deny-privileged
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      validate:
-        message: "Privileged containers are not allowed."
-        pattern:
-          spec:
-            containers:
-              - securityContext:
-                  privileged: "false"
-            =(initContainers):
-              - securityContext:
-                  privileged: "false"
-            =(ephemeralContainers):
-              - securityContext:
-                  privileged: "false"
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "Privileged containers are not allowed."
+      expression: >-
+        !object.spec.containers.exists(c, has(c.securityContext) && has(c.securityContext.privileged) && c.securityContext.privileged == true) &&
+        !object.spec.?initContainers.orValue([]).exists(c, has(c.securityContext) && has(c.securityContext.privileged) && c.securityContext.privileged == true) &&
+        !object.spec.?ephemeralContainers.orValue([]).exists(c, has(c.securityContext) && has(c.securityContext.privileged) && c.securityContext.privileged == true)

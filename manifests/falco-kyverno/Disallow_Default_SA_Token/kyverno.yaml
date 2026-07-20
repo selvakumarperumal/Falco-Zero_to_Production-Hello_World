@@ -1,5 +1,5 @@
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: disallow-default-sa-token
   annotations:
@@ -12,23 +12,16 @@ metadata:
   labels:
     app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Audit
-  rules:
-    - name: deny-default-sa-token
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      preconditions:
-        all:
-          - key: "{{ request.object.spec.serviceAccountName || 'default' }}"
-            operator: Equals
-            value: "default"
-      validate:
-        message: >-
-          Pods using the default service account must set
-          automountServiceAccountToken to false.
-        pattern:
-          spec:
-            automountServiceAccountToken: false
+  validationActions:
+    - Audit
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "Pods using the default service account must set automountServiceAccountToken to false."
+      expression: >-
+        (!has(object.spec.serviceAccountName) || object.spec.serviceAccountName == 'default') ?
+        (has(object.spec.automountServiceAccountToken) && object.spec.automountServiceAccountToken == false) : true

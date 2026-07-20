@@ -1,5 +1,5 @@
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: require-pod-probes
   annotations:
@@ -9,22 +9,18 @@ metadata:
     policies.kyverno.io/description: >-
       All containers must define liveness and readiness probes to ensure
       Kubernetes can detect and recover from unhealthy states.
-    pod-policies.kyverno.io/autogen-controllers: DaemonSet,Deployment,StatefulSet
   labels:
     app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Audit
-  rules:
-    - name: validate-probes
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      validate:
-        message: "Liveness and readiness probes are required for all containers."
-        pattern:
-          spec:
-            containers:
-              - livenessProbe: "?*"
-                readinessProbe: "?*"
+  validationActions:
+    - Audit
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "Liveness and readiness probes are required for all containers."
+      expression: >-
+        object.spec.containers.all(c, has(c.livenessProbe) && has(c.readinessProbe))

@@ -1,5 +1,5 @@
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: drop-all-capabilities
   annotations:
@@ -12,21 +12,20 @@ metadata:
   labels:
     app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Enforce
-  rules:
-    - name: require-drop-all
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      validate:
-        message: "Containers must drop ALL capabilities."
-        foreach:
-          - list: "request.object.spec.containers"
-            deny:
-              conditions:
-                all:
-                  - key: ALL
-                    operator: AnyNotIn
-                    value: "{{ element.securityContext.capabilities.drop || `[]` }}"
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "Containers must drop ALL capabilities."
+      expression: >-
+        object.spec.containers.all(c,
+          has(c.securityContext) &&
+          has(c.securityContext.capabilities) &&
+          has(c.securityContext.capabilities.drop) &&
+          c.securityContext.capabilities.drop.contains('ALL')
+        )
