@@ -39,6 +39,7 @@ spec:
             redis:
               storageEnabled: {{ .Values.falco.falcosidekick.webui.redis.storageEnabled }}
               storageSize: {{ .Values.falco.falcosidekick.webui.redis.storageSize | quote}}
+              storageClass: {{.Values.falco.falcosidekick.webui.redis.storageClass | quote}}
         tty: true
         resources:
           requests:
