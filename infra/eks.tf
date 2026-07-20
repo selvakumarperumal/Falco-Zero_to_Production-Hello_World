@@ -27,6 +27,9 @@ module "eks" {
 
   # EKS Addons
   addons = {
+    aws-ebs-csi-driver = {
+      most_recent = true
+    }
     coredns = {
       most_recent = true
     }
@@ -59,4 +62,6 @@ resource "aws_eks_pod_identity_association" "ebs_csi_pod_identity" {
   namespace       = "kube-system"
   service_account = "ebs-csi-controller-sa"
   role_arn        = module.ebs_csi_pod_identity.iam_role_arn
+
+  depends_on = [module.eks]
 }
