@@ -2,7 +2,7 @@
 
 | Property | Value |
 |---|---|
-| **Type** | Kyverno (Validation) + Falco (Detection) |
+| **Type** | Kyverno (ValidatingPolicy) + Falco (Detection) |
 | **Kyverno Prevention** | Validates `readOnlyRootFilesystem: true` under container securityContext. |
 | **Falco Detection** | Tracks open/write syscalls targeting root directories (excluding exceptions like `/tmp`). |
 
@@ -11,8 +11,8 @@ Enforces setting the root filesystem as read-only, restricting writable storage 
 
 ## Kyverno Policy Manifest
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: require-readonly-rootfs
   annotations:
@@ -25,21 +25,22 @@ metadata:
   labels:
     app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Audit
-  rules:
-    - name: require-readonly-rootfs
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      validate:
-        message: "Root filesystem must be read-only. Set securityContext.readOnlyRootFilesystem to true."
-        pattern:
-          spec:
-            containers:
-              - securityContext:
-                  readOnlyRootFilesystem: true
+  validationActions:
+    - Audit
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "Root filesystem must be read-only. Set securityContext.readOnlyRootFilesystem to true."
+      expression: >-
+        object.spec.containers.all(c,
+          has(c.securityContext) &&
+          has(c.securityContext.readOnlyRootFilesystem) &&
+          c.securityContext.readOnlyRootFilesystem == true
+        )
 ```
 
 ## Falco Rule Manifest
@@ -81,7 +82,7 @@ data:
 ## Detailed Explanation
 ### Kyverno Policy Manifest Explanation
 The policy enforces read-only root filesystems:
-- **`validationFailureAction: Audit`**: Analyzes and flags missing settings.
+- **`validationActions`**: Set to `Deny` to block non-compliant requests at admission time.
 - **`readOnlyRootFilesystem: true`**: Enforces container security contexts to block disk writes to the root filesystem layer.
 
 ### Falco Rule Manifest Explanation

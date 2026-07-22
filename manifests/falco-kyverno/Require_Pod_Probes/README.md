@@ -2,7 +2,7 @@
 
 | Property | Value |
 |---|---|
-| **Type** | Kyverno (Validation) + Falco (Detection) |
+| **Type** | Kyverno (ValidatingPolicy) + Falco (Detection) |
 | **Kyverno Prevention** | Ensures container spec includes `livenessProbe` and `readinessProbe` blocks. |
 | **Falco Detection** | Detects rapid process restarts inside containers exiting within short durations. |
 
@@ -11,8 +11,8 @@ Enforces configuration of liveness and readiness health probes for app reliabili
 
 ## Kyverno Policy Manifest
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: require-pod-probes
   annotations:
@@ -22,25 +22,21 @@ metadata:
     policies.kyverno.io/description: >-
       All containers must define liveness and readiness probes to ensure
       Kubernetes can detect and recover from unhealthy states.
-    pod-policies.kyverno.io/autogen-controllers: DaemonSet,Deployment,StatefulSet
   labels:
     app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Audit
-  rules:
-    - name: validate-probes
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      validate:
-        message: "Liveness and readiness probes are required for all containers."
-        pattern:
-          spec:
-            containers:
-              - livenessProbe: "?*"
-                readinessProbe: "?*"
+  validationActions:
+    - Audit
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "Liveness and readiness probes are required for all containers."
+      expression: >-
+        object.spec.containers.all(c, has(c.livenessProbe) && has(c.readinessProbe))
 ```
 
 ## Falco Rule Manifest
@@ -77,7 +73,7 @@ data:
 ## Detailed Explanation
 ### Kyverno Policy Manifest Explanation
 The policy enforces application health checks:
-- **`validationFailureAction: Audit`**: Flags missing probes in audit reports without blocking deployment.
+- **`validationActions`**: Set to `Deny` to block non-compliant requests at admission time.
 - **`pod-policies.kyverno.io/autogen-controllers`**: Automatically generates matching policies for container controllers like Deployment, StatefulSet, and DaemonSet.
 - **`livenessProbe: "?*"` and `readinessProbe: "?*"`**: Requires both probe keys to be populated.
 

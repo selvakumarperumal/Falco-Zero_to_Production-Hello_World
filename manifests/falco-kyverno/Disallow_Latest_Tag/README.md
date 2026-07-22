@@ -2,7 +2,7 @@
 
 | Property | Value |
 |---|---|
-| **Type** | Kyverno (Validation) + Falco (Detection) |
+| **Type** | Kyverno (ValidatingPolicy) + Falco (Detection) |
 | **Kyverno Prevention** | Validates that container images do not end in `:latest` and explicitly contain a colon. |
 | **Falco Detection** | Detects container start events where the image repository tag is `latest` or blank. |
 
@@ -11,8 +11,8 @@ Ensures all container deployments use specific version tags instead of the mutab
 
 ## Kyverno Policy Manifest
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: disallow-latest-tag
   annotations:
@@ -25,22 +25,19 @@ metadata:
   labels:
     app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Enforce
-  rules:
-    - name: require-image-tag
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      validate:
-        message: "An image tag is required and must not be ':latest'."
-        pattern:
-          spec:
-            containers:
-              - image: "!*:latest & *:*"
-            =(initContainers):
-              - image: "!*:latest & *:*"
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "An image tag is required and must not be ':latest'."
+      expression: >-
+        object.spec.containers.all(c, !c.image.endsWith(':latest')) &&
+        object.spec.?initContainers.orValue([]).all(c, !c.image.endsWith(':latest'))
 ```
 
 ## Falco Rule Manifest

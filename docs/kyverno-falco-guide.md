@@ -177,6 +177,8 @@ metadata:
     policies.kyverno.io/description: >-
       Privileged containers have full access to the host. This policy
       ensures that the privileged flag is never set to true.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
   validationActions:
     - Deny
@@ -190,7 +192,8 @@ spec:
     - message: "Privileged containers are not allowed."
       expression: >-
         !object.spec.containers.exists(c, has(c.securityContext) && has(c.securityContext.privileged) && c.securityContext.privileged == true) &&
-        !object.spec.?initContainers.orValue([]).exists(c, has(c.securityContext) && has(c.securityContext.privileged) && c.securityContext.privileged == true)
+        !object.spec.?initContainers.orValue([]).exists(c, has(c.securityContext) && has(c.securityContext.privileged) && c.securityContext.privileged == true) &&
+        !object.spec.?ephemeralContainers.orValue([]).exists(c, has(c.securityContext) && has(c.securityContext.privileged) && c.securityContext.privileged == true)
 ```
 
 **What this does:** Rejects any Pod that sets `privileged: true` on *any* container — regular, init, or ephemeral. The `=(...)` syntax means "if this field exists, validate it" — it won't fail just because there are no initContainers.
@@ -233,6 +236,8 @@ metadata:
     policies.kyverno.io/severity: high
     policies.kyverno.io/description: >-
       Containers must not share the host PID, IPC, or network namespaces.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
   validationActions:
     - Deny
@@ -276,8 +281,8 @@ spec:
 #### Kyverno Policy (Prevention)
 
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: require-run-as-non-root
   annotations:
@@ -286,25 +291,22 @@ metadata:
     policies.kyverno.io/severity: medium
     policies.kyverno.io/description: >-
       Containers must set runAsNonRoot to true to prevent running as UID 0.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Enforce
-  rules:
-    - name: require-non-root
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      validate:
-        message: "Containers must not run as root. Set spec.containers[*].securityContext.runAsNonRoot to true."
-        pattern:
-          spec:
-            containers:
-              - securityContext:
-                  runAsNonRoot: true
-            =(initContainers):
-              - securityContext:
-                  runAsNonRoot: true
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "Containers must not run as root. Set securityContext.runAsNonRoot to true."
+      expression: >-
+        (has(object.spec.securityContext) && has(object.spec.securityContext.runAsNonRoot) && object.spec.securityContext.runAsNonRoot == true) ||
+        object.spec.containers.all(c, has(c.securityContext) && has(c.securityContext.runAsNonRoot) && c.securityContext.runAsNonRoot == true)
 ```
 
 #### Falco Rule (Detection)
@@ -333,8 +335,8 @@ spec:
 #### Kyverno Policy (Prevention)
 
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: restrict-image-registries
   annotations:
@@ -342,44 +344,29 @@ metadata:
     policies.kyverno.io/category: Supply Chain Security
     policies.kyverno.io/severity: high
     policies.kyverno.io/description: >-
-      Images may only be pulled from approved registries. Update the allowed
-      registry list to match your organization's approved sources.
+      Images may only be pulled from approved registries.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Enforce
-  rules:
-    - name: validate-registries
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      validate:
-        message: >-
-          Images must come from an approved registry.
-          Allowed: ECR (*.dkr.ecr.*.amazonaws.com), ghcr.io, gcr.io.
-        foreach:
-          - list: "request.object.spec.containers"
-            deny:
-              conditions:
-                all:
-                  - key: "{{ element.image }}"
-                    operator: AnyNotIn
-                    value:
-                      - "*.dkr.ecr.*.amazonaws.com/*"
-                      - "ghcr.io/*"
-                      - "gcr.io/*"
-                      - "registry.k8s.io/*"
-          - list: "request.object.spec.initContainers || []"
-            deny:
-              conditions:
-                all:
-                  - key: "{{ element.image }}"
-                    operator: AnyNotIn
-                    value:
-                      - "*.dkr.ecr.*.amazonaws.com/*"
-                      - "ghcr.io/*"
-                      - "gcr.io/*"
-                      - "registry.k8s.io/*"
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "Images must come from an approved registry (ECR, ghcr.io, gcr.io, or registry.k8s.io)."
+      expression: >-
+        object.spec.containers.all(c,
+          c.image.contains('.dkr.ecr.') ||
+          c.image.startsWith('ghcr.io/') ||
+          c.image.startsWith('gcr.io/') ||
+          c.image.startsWith('registry.k8s.io/') ||
+          c.image.startsWith('docker.io/') ||
+          !c.image.contains('/')
+        )
 ```
 
 #### Falco Rule (Detection)
@@ -418,8 +405,8 @@ spec:
 #### Kyverno Policy (Prevention)
 
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: disallow-latest-tag
   annotations:
@@ -427,25 +414,24 @@ metadata:
     policies.kyverno.io/category: Supply Chain Security
     policies.kyverno.io/severity: medium
     policies.kyverno.io/description: >-
-      Using the :latest tag makes deployments non-reproducible and hides
-      what version is actually running. Require explicit version tags.
+      Using the :latest tag makes deployments non-reproducible. Require
+      explicit version tags.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Enforce
-  rules:
-    - name: require-image-tag
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      validate:
-        message: "An image tag is required and must not be ':latest'."
-        pattern:
-          spec:
-            containers:
-              - image: "!*:latest & *:*"
-            =(initContainers):
-              - image: "!*:latest & *:*"
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "An image tag is required and must not be ':latest'."
+      expression: >-
+        object.spec.containers.all(c, !c.image.endsWith(':latest')) &&
+        object.spec.?initContainers.orValue([]).all(c, !c.image.endsWith(':latest'))
 ```
 
 **What the pattern `"!*:latest & *:*"` means:**
@@ -477,8 +463,8 @@ spec:
 #### Kyverno Policy (Prevention)
 
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: require-resource-limits
   annotations:
@@ -488,24 +474,26 @@ metadata:
     policies.kyverno.io/description: >-
       All containers must define CPU and memory limits to prevent resource
       exhaustion on shared nodes.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Enforce
-  rules:
-    - name: check-resource-limits
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      validate:
-        message: "CPU and memory limits are required for all containers."
-        pattern:
-          spec:
-            containers:
-              - resources:
-                  limits:
-                    cpu: "?*"
-                    memory: "?*"
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "CPU and memory limits are required for all containers."
+      expression: >-
+        object.spec.containers.all(c,
+          has(c.resources) &&
+          has(c.resources.limits) &&
+          has(c.resources.limits.cpu) &&
+          has(c.resources.limits.memory)
+        )
 ```
 
 **What `"?*"` means:** "Any non-empty value" — at least one character is required. This ensures the field exists and has a value, without constraining *what* the value is.
@@ -537,8 +525,8 @@ spec:
 #### Kyverno Policy (Prevention)
 
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: require-readonly-rootfs
   annotations:
@@ -548,22 +536,25 @@ metadata:
     policies.kyverno.io/description: >-
       Containers must use a read-only root filesystem. Any writable
       paths should be explicitly defined as volume mounts.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Audit
-  rules:
-    - name: require-readonly-rootfs
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      validate:
-        message: "Root filesystem must be read-only. Set securityContext.readOnlyRootFilesystem to true."
-        pattern:
-          spec:
-            containers:
-              - securityContext:
-                  readOnlyRootFilesystem: true
+  validationActions:
+    - Audit
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "Root filesystem must be read-only. Set securityContext.readOnlyRootFilesystem to true."
+      expression: >-
+        object.spec.containers.all(c,
+          has(c.securityContext) &&
+          has(c.securityContext.readOnlyRootFilesystem) &&
+          c.securityContext.readOnlyRootFilesystem == true
+        )
 ```
 
 > **Note:** This starts in `Audit` mode because many applications write to temp directories. Migrate to `Enforce` after adding `emptyDir` volumes for `/tmp` in your deployments.
@@ -601,8 +592,8 @@ spec:
 #### Kyverno Policy (Prevention)
 
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: drop-all-capabilities
   annotations:
@@ -611,26 +602,27 @@ metadata:
     policies.kyverno.io/severity: medium
     policies.kyverno.io/description: >-
       Containers must drop ALL Linux capabilities. Only explicitly needed
-      capabilities should be added back (e.g., NET_BIND_SERVICE).
+      capabilities should be added back.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Enforce
-  rules:
-    - name: require-drop-all
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      validate:
-        message: "Containers must drop ALL capabilities."
-        foreach:
-          - list: "request.object.spec.containers"
-            deny:
-              conditions:
-                all:
-                  - key: ALL
-                    operator: AnyNotIn
-                    value: "{{ element.securityContext.capabilities.drop || `[]` }}"
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "Containers must drop ALL capabilities."
+      expression: >-
+        object.spec.containers.all(c,
+          has(c.securityContext) &&
+          has(c.securityContext.capabilities) &&
+          has(c.securityContext.capabilities.drop) &&
+          c.securityContext.capabilities.drop.contains('ALL')
+        )
 ```
 
 #### Falco Rule (Detection)
@@ -661,8 +653,8 @@ spec:
 #### Kyverno Policy (Prevention)
 
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: disallow-privilege-escalation
   annotations:
@@ -671,25 +663,30 @@ metadata:
     policies.kyverno.io/severity: high
     policies.kyverno.io/description: >-
       Containers must not allow privilege escalation via setuid/setgid binaries.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Enforce
-  rules:
-    - name: deny-privilege-escalation
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      validate:
-        message: "Privilege escalation is not allowed. Set allowPrivilegeEscalation to false."
-        pattern:
-          spec:
-            containers:
-              - securityContext:
-                  allowPrivilegeEscalation: false
-            =(initContainers):
-              - securityContext:
-                  allowPrivilegeEscalation: false
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "Privilege escalation is not allowed. Set allowPrivilegeEscalation to false."
+      expression: >-
+        object.spec.containers.all(c,
+          has(c.securityContext) &&
+          has(c.securityContext.allowPrivilegeEscalation) &&
+          c.securityContext.allowPrivilegeEscalation == false
+        ) &&
+        object.spec.?initContainers.orValue([]).all(c,
+          has(c.securityContext) &&
+          has(c.securityContext.allowPrivilegeEscalation) &&
+          c.securityContext.allowPrivilegeEscalation == false
+        )
 ```
 
 #### Falco Rule (Detection)
@@ -720,8 +717,8 @@ spec:
 #### Kyverno Policy (Prevention)
 
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: disallow-hostpath-volumes
   annotations:
@@ -731,21 +728,21 @@ metadata:
     policies.kyverno.io/description: >-
       HostPath volumes give containers direct access to the node filesystem.
       This policy blocks all hostPath volume mounts.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Enforce
-  rules:
-    - name: deny-hostpath
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      validate:
-        message: "HostPath volumes are not allowed."
-        pattern:
-          spec:
-            =(volumes):
-              - X(hostPath): "null"
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "HostPath volumes are not allowed."
+      expression: >-
+        !has(object.spec.volumes) || !object.spec.volumes.exists(v, has(v.hostPath))
 ```
 
 **What `X(hostPath): "null"` means:** The `X()` operator (Kyverno's "must not exist" check) ensures the `hostPath` field is absent from every volume definition.
@@ -791,8 +788,8 @@ spec:
 #### Kyverno Policy (Prevention)
 
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: disallow-default-sa-token
   annotations:
@@ -800,29 +797,24 @@ metadata:
     policies.kyverno.io/category: Security Best Practices
     policies.kyverno.io/severity: medium
     policies.kyverno.io/description: >-
-      Pods using the 'default' service account must not automount the
+      Pods using the default service account must not automount the
       service account token unless explicitly needed.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Audit
-  rules:
-    - name: deny-default-sa-token
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      preconditions:
-        all:
-          - key: "{{ request.object.spec.serviceAccountName || 'default' }}"
-            operator: Equals
-            value: "default"
-      validate:
-        message: >-
-          Pods using the default service account must set
-          automountServiceAccountToken to false.
-        pattern:
-          spec:
-            automountServiceAccountToken: false
+  validationActions:
+    - Audit
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "Pods using the default service account must set automountServiceAccountToken to false."
+      expression: >-
+        (!has(object.spec.serviceAccountName) || object.spec.serviceAccountName == 'default') ?
+        (has(object.spec.automountServiceAccountToken) && object.spec.automountServiceAccountToken == false) : true
 ```
 
 #### Falco Rule (Detection)
@@ -854,8 +846,8 @@ spec:
 #### Kyverno Policy (Prevention)
 
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: disallow-nodeport-services
   annotations:
@@ -865,20 +857,21 @@ metadata:
     policies.kyverno.io/description: >-
       NodePort services expose ports on every cluster node. Use LoadBalancer
       or Ingress instead for controlled external access.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Enforce
-  rules:
-    - name: deny-nodeport
-      match:
-        any:
-          - resources:
-              kinds:
-                - Service
-      validate:
-        message: "NodePort services are not allowed. Use LoadBalancer or Ingress."
-        pattern:
-          spec:
-            type: "!NodePort"
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [services]
+  validations:
+    - message: "NodePort services are not allowed. Use LoadBalancer or ClusterIP."
+      expression: >-
+        !has(object.spec.type) || object.spec.type != 'NodePort'
 ```
 
 #### Falco Rule (Detection)
@@ -910,8 +903,8 @@ spec:
 #### Kyverno Policy (Prevention)
 
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: require-pod-probes
   annotations:
@@ -921,23 +914,21 @@ metadata:
     policies.kyverno.io/description: >-
       All containers must define liveness and readiness probes to ensure
       Kubernetes can detect and recover from unhealthy states.
-    pod-policies.kyverno.io/autogen-controllers: DaemonSet,Deployment,StatefulSet
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Audit
-  rules:
-    - name: validate-probes
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      validate:
-        message: "Liveness and readiness probes are required for all containers."
-        pattern:
-          spec:
-            containers:
-              - livenessProbe: "?*"
-                readinessProbe: "?*"
+  validationActions:
+    - Audit
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "Liveness and readiness probes are required for all containers."
+      expression: >-
+        object.spec.containers.all(c, has(c.livenessProbe) && has(c.readinessProbe))
 ```
 
 #### Falco Rule (Detection)
@@ -968,8 +959,8 @@ spec:
 #### Kyverno Policy (Prevention — Validate)
 
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: require-labels
   annotations:
@@ -977,23 +968,22 @@ metadata:
     policies.kyverno.io/category: Best Practices
     policies.kyverno.io/severity: low
     policies.kyverno.io/description: >-
-      All Pods must have the app.kubernetes.io/name and
-      app.kubernetes.io/managed-by labels.
+      All Pods must have the app.kubernetes.io/name label.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Audit
-  rules:
-    - name: require-app-label
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      validate:
-        message: "The label 'app.kubernetes.io/name' is required."
-        pattern:
-          metadata:
-            labels:
-              app.kubernetes.io/name: "?*"
+  validationActions:
+    - Audit
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "The label 'app.kubernetes.io/name' is required."
+      expression: >-
+        has(object.metadata.labels) && 'app.kubernetes.io/name' in object.metadata.labels && object.metadata.labels['app.kubernetes.io/name'] != ''
 ```
 
 > **No Falco companion** — labels are a metadata concern. There's no runtime syscall that corresponds to "missing labels." This is a prevention-only control.
@@ -1007,8 +997,8 @@ spec:
 #### Kyverno Policy (Generation)
 
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: GeneratingPolicy
 metadata:
   name: generate-default-deny-netpol
   annotations:
@@ -1018,36 +1008,27 @@ metadata:
     policies.kyverno.io/description: >-
       Automatically creates a default-deny NetworkPolicy in every new
       namespace to enforce zero-trust networking.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  rules:
-    - name: generate-default-deny
-      match:
-        any:
-          - resources:
-              kinds:
-                - Namespace
-      exclude:
-        any:
-          - resources:
-              namespaces:
-                - kube-system
-                - kube-public
-                - kube-node-lease
-                - kyverno
-                - argocd
-                - falco
-      generate:
-        kind: NetworkPolicy
-        apiVersion: networking.k8s.io/v1
-        name: default-deny-all
-        namespace: "{{request.object.metadata.name}}"
-        synchronize: true
-        data:
-          spec:
-            podSelector: {}
-            policyTypes:
-              - Ingress
-              - Egress
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE]
+        resources: [namespaces]
+  generate:
+    apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    name: default-deny-all
+    namespace: "{{ request.object.metadata.name }}"
+    synchronize: true
+    data:
+      spec:
+        podSelector: {}
+        policyTypes:
+          - Ingress
+          - Egress
 ```
 
 **What `synchronize: true` means:** If you update the Kyverno policy, the generated NetworkPolicy in every namespace also updates. If someone deletes the generated NetworkPolicy, Kyverno recreates it.
@@ -1082,8 +1063,8 @@ spec:
 #### Kyverno Policy (Mutation)
 
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: MutatingPolicy
 metadata:
   name: mutate-image-pull-policy
   annotations:
@@ -1093,23 +1074,21 @@ metadata:
     policies.kyverno.io/description: >-
       Automatically sets imagePullPolicy to Always for containers using
       the :latest tag.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  rules:
-    - name: set-pull-always
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      mutate:
-        patchStrategicMerge:
-          spec:
-            containers:
-              - (image): "*:latest"
-                imagePullPolicy: "Always"
-            =(initContainers):
-              - (image): "*:latest"
-                imagePullPolicy: "Always"
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  mutations:
+    - patchStrategicMerge:
+        spec:
+          containers:
+            - (image): "*:latest"
+              imagePullPolicy: "Always"
 ```
 
 **What `(image): "*:latest"` means:** The parentheses make `image` an anchor — "find containers where image matches `*:latest`, and apply this patch to those containers." It's a conditional mutation.
@@ -1125,8 +1104,8 @@ spec:
 #### Kyverno Policy (Mutation)
 
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: MutatingPolicy
 metadata:
   name: add-pss-labels
   annotations:
@@ -1136,29 +1115,23 @@ metadata:
     policies.kyverno.io/description: >-
       Automatically adds Pod Security Standard labels to new namespaces
       to enforce baseline security at the namespace level.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  rules:
-    - name: add-pss-baseline
-      match:
-        any:
-          - resources:
-              kinds:
-                - Namespace
-      exclude:
-        any:
-          - resources:
-              namespaces:
-                - kube-system
-                - kube-public
-                - kube-node-lease
-      mutate:
-        patchStrategicMerge:
-          metadata:
-            labels:
-              pod-security.kubernetes.io/enforce: "baseline"
-              pod-security.kubernetes.io/enforce-version: "latest"
-              pod-security.kubernetes.io/warn: "restricted"
-              pod-security.kubernetes.io/warn-version: "latest"
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE]
+        resources: [namespaces]
+  mutations:
+    - patchStrategicMerge:
+        metadata:
+          labels:
+            pod-security.kubernetes.io/enforce: "baseline"
+            pod-security.kubernetes.io/enforce-version: "latest"
+            pod-security.kubernetes.io/warn: "restricted"
+            pod-security.kubernetes.io/warn-version: "latest"
 ```
 
 > **No Falco companion** — PSS labels are namespace metadata. Runtime enforcement of the actual security controls is handled by Examples 1–9.

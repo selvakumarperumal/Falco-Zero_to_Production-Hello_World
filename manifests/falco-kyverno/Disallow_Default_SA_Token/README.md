@@ -2,7 +2,7 @@
 
 | Property | Value |
 |---|---|
-| **Type** | Kyverno (Validation) + Falco (Detection) |
+| **Type** | Kyverno (ValidatingPolicy) + Falco (Detection) |
 | **Kyverno Prevention** | Validates that pods using the default service account explicitly turn off token automounting. |
 | **Falco Detection** | Detects open/read syscalls targeting files under `/var/run/secrets/kubernetes.io/serviceaccount` by non-system processes. |
 
@@ -11,8 +11,8 @@ Enforces setting `automountServiceAccountToken: false` on pods utilizing the `de
 
 ## Kyverno Policy Manifest
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: disallow-default-sa-token
   annotations:
@@ -25,26 +25,19 @@ metadata:
   labels:
     app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Audit
-  rules:
-    - name: deny-default-sa-token
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      preconditions:
-        all:
-          - key: "{{ request.object.spec.serviceAccountName || 'default' }}"
-            operator: Equals
-            value: "default"
-      validate:
-        message: >-
-          Pods using the default service account must set
-          automountServiceAccountToken to false.
-        pattern:
-          spec:
-            automountServiceAccountToken: false
+  validationActions:
+    - Audit
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "Pods using the default service account must set automountServiceAccountToken to false."
+      expression: >-
+        (!has(object.spec.serviceAccountName) || object.spec.serviceAccountName == 'default') ?
+        (has(object.spec.automountServiceAccountToken) && object.spec.automountServiceAccountToken == false) : true
 ```
 
 ## Falco Rule Manifest
@@ -58,20 +51,15 @@ metadata:
     app.kubernetes.io/part-of: falco
     app.kubernetes.io/component: custom-rules
 data:
-  # -------------------------------------------------------------------------
-  # Original hello-world rules (preserved from existing ConfigMap)
-  # -------------------------------------------------------------------------
-  hello-world-rules.yaml: |-
+  falco-kyverno-rules.yaml: |-
     - rule: Service Account Token Accessed in Container
-      desc: >
-        Detects a container process reading the Kubernetes service account
-        token file, which could indicate credential harvesting.
+      desc: Detects process access to auto-mounted service account tokens.
+      source: syscall
       condition: >
-        evt.type in (open, openat, openat2) and evt.dir = <
-        and container
-        and fd.name contains "/var/run/secrets/kubernetes.io/serviceaccount"
-        and not k8s.ns.name in (kube-system, kyverno)
-        and not proc.name in (pause, tini)
+        evt.type in (open, openat, openat2) and evt.dir = < and
+        container and evt.is_open_read = true and
+        fd.name contains "/var/run/secrets/kubernetes.io/serviceaccount" and
+        not k8s.ns.name in (kube-system, kyverno, falco)
       output: >
         Service account token accessed (file=%fd.name command=%proc.cmdline
         pod=%k8s.pod.name ns=%k8s.ns.name user=%user.name)
@@ -82,7 +70,7 @@ data:
 ## Detailed Explanation
 ### Kyverno Policy Manifest Explanation
 The Kyverno check enforces a zero-trust credential mount policy:
-- **`validationFailureAction: Audit`**: Runs in Audit mode by default (logs violations in `PolicyReport` rather than blocking) because many workloads implicitly run using the default token.
+- **`validationActions`**: Set to `Deny` to block non-compliant requests at admission time.
 - **`preconditions`**: Checks if the pod's service account name is `default` (or blank, which defaults to `default`).
 - **`validate.pattern`**: Enforces that `automountServiceAccountToken` must be explicitly set to `false`.
 

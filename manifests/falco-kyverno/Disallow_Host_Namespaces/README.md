@@ -2,7 +2,7 @@
 
 | Property | Value |
 |---|---|
-| **Type** | Kyverno (Validation) + Falco (Detection) |
+| **Type** | Kyverno (ValidatingPolicy) + Falco (Detection) |
 | **Kyverno Prevention** | Enforces `hostPID: false`, `hostIPC: false`, and `hostNetwork: false` on pod specifications. |
 | **Falco Detection** | Detects container start events containing flags `CLONE_NEWPID` or `CLONE_NEWNET`. |
 
@@ -11,8 +11,8 @@ Blocks pods sharing host PID, IPC, or Network namespaces (which breaks node isol
 
 ## Kyverno Policy Manifest
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: disallow-host-namespaces
   annotations:
@@ -24,21 +24,20 @@ metadata:
   labels:
     app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Enforce
-  rules:
-    - name: deny-host-namespaces
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      validate:
-        message: "Host PID, IPC, and network namespaces are not allowed."
-        pattern:
-          spec:
-            =(hostPID): "false"
-            =(hostIPC): "false"
-            =(hostNetwork): "false"
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "Host PID, IPC, and network namespaces are not allowed."
+      expression: >-
+        !(has(object.spec.hostPID) && object.spec.hostPID == true) &&
+        !(has(object.spec.hostIPC) && object.spec.hostIPC == true) &&
+        !(has(object.spec.hostNetwork) && object.spec.hostNetwork == true)
 ```
 
 ## Falco Rule Manifest
@@ -52,21 +51,17 @@ metadata:
     app.kubernetes.io/part-of: falco
     app.kubernetes.io/component: custom-rules
 data:
-  # -------------------------------------------------------------------------
-  # Original hello-world rules (preserved from existing ConfigMap)
-  # -------------------------------------------------------------------------
-  hello-world-rules.yaml: |-
+  falco-kyverno-rules.yaml: |-
     - rule: Container Using Host Namespace
-      desc: >
-        Detects a container running with host PID or network namespace.
+      desc: Detects a container sharing host PID or network namespaces.
+      source: syscall
       condition: >
-        container_started and container
-        and (container.privileged = true or k8s.pod.name != "")
-        and (evt.arg.flags contains "CLONE_NEWPID"
-          or evt.arg.flags contains "CLONE_NEWNET")
+        evt.type = execve and evt.dir = < and
+        container and
+        (evt.arg.flags contains "CLONE_NEWPID" or evt.arg.flags contains "CLONE_NEWNET")
       output: >
-        Container uses host namespace (pod=%k8s.pod.name ns=%k8s.ns.name
-        image=%container.image.repository)
+        Container using host namespace (user=%user.name pod=%k8s.pod.name
+        ns=%k8s.ns.name image=%container.image.repository)
       priority: CRITICAL
       tags: [kyverno_companion, host_namespace, mitre_privilege_escalation]
 ```
@@ -74,7 +69,7 @@ data:
 ## Detailed Explanation
 ### Kyverno Policy Manifest Explanation
 This policy prevents container breakout to the host namespaces:
-- **`validationFailureAction: Enforce`**: Blocks non-compliant pods immediately.
+- **`validationActions`**: Set to `Deny` to block non-compliant requests at admission time.
 - **`=(hostPID): "false"`**, **`=(hostIPC): "false"`**, **`=(hostNetwork): "false"`**: Validates that if these properties exist in the pod spec, they must be set to `false`.
 
 ### Falco Rule Manifest Explanation

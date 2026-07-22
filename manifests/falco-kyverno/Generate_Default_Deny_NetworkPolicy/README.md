@@ -2,7 +2,7 @@
 
 | Property | Value |
 |---|---|
-| **Type** | Kyverno (Generation) + Falco (Detection) |
+| **Type** | Kyverno (GeneratingPolicy) + Falco (Detection) |
 | **Kyverno Prevention** | Generates a default-deny ingress/egress NetworkPolicy upon new namespace creation. |
 | **Falco Detection** | Alerts on outbound network traffic targeting public IP addresses (ignoring internal pod/node subnets). |
 
@@ -11,8 +11,8 @@ Automatically generates a default-deny NetworkPolicy for any newly created names
 
 ## Kyverno Policy Manifest
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: GeneratingPolicy
 metadata:
   name: generate-default-deny-netpol
   annotations:
@@ -25,35 +25,24 @@ metadata:
   labels:
     app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  rules:
-    - name: generate-default-deny
-      match:
-        any:
-          - resources:
-              kinds:
-                - Namespace
-      exclude:
-        any:
-          - resources:
-              namespaces:
-                - kube-system
-                - kube-public
-                - kube-node-lease
-                - kyverno
-                - argocd
-                - falco
-      generate:
-        kind: NetworkPolicy
-        apiVersion: networking.k8s.io/v1
-        name: default-deny-all
-        namespace: "{{request.object.metadata.name}}"
-        synchronize: true
-        data:
-          spec:
-            podSelector: {}
-            policyTypes:
-              - Ingress
-              - Egress
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE]
+        resources: [namespaces]
+  generate:
+    apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    name: default-deny-all
+    namespace: "{{ request.object.metadata.name }}"
+    synchronize: true
+    data:
+      spec:
+        podSelector: {}
+        policyTypes:
+          - Ingress
+          - Egress
 ```
 
 ## Falco Rule Manifest

@@ -2,7 +2,7 @@
 
 | Property | Value |
 |---|---|
-| **Type** | Kyverno (Validation) + Falco (Detection) |
+| **Type** | Kyverno (ValidatingPolicy) + Falco (Detection) |
 | **Kyverno Prevention** | Enforces `runAsNonRoot: true` in the container securityContext. |
 | **Falco Detection** | Alerts when a spawned process is executed with UID 0 (root) inside namespaces. |
 
@@ -11,8 +11,8 @@ Ensures containers run as non-root users (UID != 0). Monitors and alerts on root
 
 ## Kyverno Policy Manifest
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: require-run-as-non-root
   annotations:
@@ -24,24 +24,19 @@ metadata:
   labels:
     app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Enforce
-  rules:
-    - name: require-non-root
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      validate:
-        message: "Containers must not run as root. Set securityContext.runAsNonRoot to true."
-        pattern:
-          spec:
-            containers:
-              - securityContext:
-                  runAsNonRoot: true
-            =(initContainers):
-              - securityContext:
-                  runAsNonRoot: true
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "Containers must not run as root. Set securityContext.runAsNonRoot to true."
+      expression: >-
+        (has(object.spec.securityContext) && has(object.spec.securityContext.runAsNonRoot) && object.spec.securityContext.runAsNonRoot == true) ||
+        object.spec.containers.all(c, has(c.securityContext) && has(c.securityContext.runAsNonRoot) && c.securityContext.runAsNonRoot == true)
 ```
 
 ## Falco Rule Manifest
@@ -55,17 +50,14 @@ metadata:
     app.kubernetes.io/part-of: falco
     app.kubernetes.io/component: custom-rules
 data:
-  # -------------------------------------------------------------------------
-  # Original hello-world rules (preserved from existing ConfigMap)
-  # -------------------------------------------------------------------------
-  hello-world-rules.yaml: |-
+  falco-kyverno-rules.yaml: |-
     - rule: Container Running as Root User
-      desc: >
-        Detects a process running as root (UID 0) inside a container.
+      desc: Detects a process spawned with UID 0 (root) inside an application container.
+      source: syscall
       condition: >
-        spawned_process and container
-        and user.uid = 0
-        and not k8s.ns.name in (kube-system, kyverno)
+        evt.type = execve and evt.dir = < and
+        container and user.uid = 0 and
+        not k8s.ns.name in (kube-system, kyverno, falco)
       output: >
         Process running as root in container (user=%user.name uid=%user.uid
         command=%proc.cmdline pod=%k8s.pod.name ns=%k8s.ns.name)

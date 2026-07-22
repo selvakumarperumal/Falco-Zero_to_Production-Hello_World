@@ -2,7 +2,7 @@
 
 | Property | Value |
 |---|---|
-| **Type** | Kyverno (Validation) + Falco (Detection) |
+| **Type** | Kyverno (ValidatingPolicy) + Falco (Detection) |
 | **Kyverno Prevention** | Enforces `privileged: false` on container security contexts. |
 | **Falco Detection** | Detects container start events where `container.privileged = true`. |
 
@@ -11,8 +11,8 @@ Prevents deploying containers with full host root level access (`privileged: tru
 
 ## Kyverno Policy Manifest
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: disallow-privileged-containers
   annotations:
@@ -25,27 +25,20 @@ metadata:
   labels:
     app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Enforce
-  rules:
-    - name: deny-privileged
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      validate:
-        message: "Privileged containers are not allowed."
-        pattern:
-          spec:
-            containers:
-              - securityContext:
-                  privileged: "false"
-            =(initContainers):
-              - securityContext:
-                  privileged: "false"
-            =(ephemeralContainers):
-              - securityContext:
-                  privileged: "false"
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "Privileged containers are not allowed."
+      expression: >-
+        !object.spec.containers.exists(c, has(c.securityContext) && has(c.securityContext.privileged) && c.securityContext.privileged == true) &&
+        !object.spec.?initContainers.orValue([]).exists(c, has(c.securityContext) && has(c.securityContext.privileged) && c.securityContext.privileged == true) &&
+        !object.spec.?ephemeralContainers.orValue([]).exists(c, has(c.securityContext) && has(c.securityContext.privileged) && c.securityContext.privileged == true)
 ```
 
 ## Falco Rule Manifest
@@ -59,17 +52,13 @@ metadata:
     app.kubernetes.io/part-of: falco
     app.kubernetes.io/component: custom-rules
 data:
-  # -------------------------------------------------------------------------
-  # Original hello-world rules (preserved from existing ConfigMap)
-  # -------------------------------------------------------------------------
-  hello-world-rules.yaml: |-
+  falco-kyverno-rules.yaml: |-
     - rule: Privileged Container Started
-      desc: >
-        Detects a container that was started with privileged mode.
-        This should never happen if Kyverno is enforcing, so this alert
-        means either Kyverno was bypassed or is in Audit mode.
+      desc: Detects a container spawned with host privileged mode enabled.
+      source: syscall
       condition: >
-        container_started and container and container.privileged = true
+        evt.type = execve and evt.dir = < and
+        container and container.privileged = true
       output: >
         Privileged container started (user=%user.name pod=%k8s.pod.name
         ns=%k8s.ns.name image=%container.image.repository)
@@ -80,7 +69,7 @@ data:
 ## Detailed Explanation
 ### Kyverno Policy Manifest Explanation
 The Kyverno check enforces a baseline security profile:
-- **`validationFailureAction: Enforce`**: Blocks creation of any pod violating the policy.
+- **`validationActions`**: Set to `Deny` to block non-compliant requests at admission time.
 - **`privileged: "false"`**: Checks container, initContainer, and ephemeralContainer profiles. Rejects any manifest that sets the `privileged` attribute to `true`.
 
 ### Falco Rule Manifest Explanation

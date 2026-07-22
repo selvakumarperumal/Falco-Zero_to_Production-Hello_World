@@ -2,7 +2,7 @@
 
 | Property | Value |
 |---|---|
-| **Type** | Kyverno (Validation) + Falco (Detection) |
+| **Type** | Kyverno (ValidatingPolicy) + Falco (Detection) |
 | **Kyverno Prevention** | Ensures CPU and Memory values are defined under resources/limits. |
 | **Falco Detection** | Alerts when resource benchmarking tools like `stress`, `stress-ng`, or `yes` are spawned. |
 
@@ -11,8 +11,8 @@ Enforces defined resource quotas (CPU/Memory) on containers to prevent noisy-nei
 
 ## Kyverno Policy Manifest
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: require-resource-limits
   annotations:
@@ -25,23 +25,23 @@ metadata:
   labels:
     app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Enforce
-  rules:
-    - name: check-resource-limits
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      validate:
-        message: "CPU and memory limits are required for all containers."
-        pattern:
-          spec:
-            containers:
-              - resources:
-                  limits:
-                    cpu: "?*"
-                    memory: "?*"
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "CPU and memory limits are required for all containers."
+      expression: >-
+        object.spec.containers.all(c,
+          has(c.resources) &&
+          has(c.resources.limits) &&
+          has(c.resources.limits.cpu) &&
+          has(c.resources.limits.memory)
+        )
 ```
 
 ## Falco Rule Manifest

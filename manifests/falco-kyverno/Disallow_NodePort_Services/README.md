@@ -2,7 +2,7 @@
 
 | Property | Value |
 |---|---|
-| **Type** | Kyverno (Validation) + Falco (Detection) |
+| **Type** | Kyverno (ValidatingPolicy) + Falco (Detection) |
 | **Kyverno Prevention** | Enforces that service definitions do not specify `type: NodePort`. |
 | **Falco Detection** | Monitors `bind`/`listen` syscalls to detect processes binding to unexpected ports (excluding ports like 80, 443, 8080, etc.). |
 
@@ -11,8 +11,8 @@ Blocks Services using `type: NodePort` which bypasses Ingress/LoadBalancers and 
 
 ## Kyverno Policy Manifest
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: disallow-nodeport-services
   annotations:
@@ -25,19 +25,18 @@ metadata:
   labels:
     app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Enforce
-  rules:
-    - name: deny-nodeport
-      match:
-        any:
-          - resources:
-              kinds:
-                - Service
-      validate:
-        message: "NodePort services are not allowed. Use LoadBalancer or Ingress."
-        pattern:
-          spec:
-            type: "!NodePort"
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [services]
+  validations:
+    - message: "NodePort services are not allowed. Use LoadBalancer or ClusterIP."
+      expression: >-
+        !has(object.spec.type) || object.spec.type != 'NodePort'
 ```
 
 ## Falco Rule Manifest

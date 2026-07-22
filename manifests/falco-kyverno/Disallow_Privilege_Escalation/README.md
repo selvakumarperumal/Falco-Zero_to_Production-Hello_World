@@ -2,7 +2,7 @@
 
 | Property | Value |
 |---|---|
-| **Type** | Kyverno (Validation) + Falco (Detection) |
+| **Type** | Kyverno (ValidatingPolicy) + Falco (Detection) |
 | **Kyverno Prevention** | Enforces `allowPrivilegeEscalation: false` on all containers. |
 | **Falco Detection** | Detects spawned processes of setuid/setgid binaries like `sudo`, `su`, `passwd` at runtime. |
 
@@ -11,8 +11,8 @@ Ensures that `allowPrivilegeEscalation` is configured as false (preventing sub-p
 
 ## Kyverno Policy Manifest
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: disallow-privilege-escalation
   annotations:
@@ -24,24 +24,27 @@ metadata:
   labels:
     app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Enforce
-  rules:
-    - name: deny-privilege-escalation
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      validate:
-        message: "Privilege escalation is not allowed. Set allowPrivilegeEscalation to false."
-        pattern:
-          spec:
-            containers:
-              - securityContext:
-                  allowPrivilegeEscalation: false
-            =(initContainers):
-              - securityContext:
-                  allowPrivilegeEscalation: false
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "Privilege escalation is not allowed. Set allowPrivilegeEscalation to false."
+      expression: >-
+        object.spec.containers.all(c,
+          has(c.securityContext) &&
+          has(c.securityContext.allowPrivilegeEscalation) &&
+          c.securityContext.allowPrivilegeEscalation == false
+        ) &&
+        object.spec.?initContainers.orValue([]).all(c,
+          has(c.securityContext) &&
+          has(c.securityContext.allowPrivilegeEscalation) &&
+          c.securityContext.allowPrivilegeEscalation == false
+        )
 ```
 
 ## Falco Rule Manifest

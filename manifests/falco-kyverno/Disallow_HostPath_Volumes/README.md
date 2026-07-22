@@ -2,7 +2,7 @@
 
 | Property | Value |
 |---|---|
-| **Type** | Kyverno (Validation) + Falco (Detection) |
+| **Type** | Kyverno (ValidatingPolicy) + Falco (Detection) |
 | **Kyverno Prevention** | Rejects any pod creation spec containing a `hostPath` volume definition. |
 | **Falco Detection** | Detects reads/writes to sensitive paths on host filesystems. |
 
@@ -11,8 +11,8 @@ Blocks configuration of `hostPath` volumes which allow pods direct access to the
 
 ## Kyverno Policy Manifest
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: disallow-hostpath-volumes
   annotations:
@@ -25,20 +25,18 @@ metadata:
   labels:
     app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Enforce
-  rules:
-    - name: deny-hostpath
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      validate:
-        message: "HostPath volumes are not allowed."
-        pattern:
-          spec:
-            =(volumes):
-              - X(hostPath): "null"
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "HostPath volumes are not allowed."
+      expression: >-
+        !has(object.spec.volumes) || !object.spec.volumes.exists(v, has(v.hostPath))
 ```
 
 ## Falco Rule Manifest
@@ -78,7 +76,7 @@ data:
 ## Detailed Explanation
 ### Kyverno Policy Manifest Explanation
 The Kyverno policy protects the host directory hierarchy:
-- **`validationFailureAction: Enforce`**: Instantly rejects the creation of pods that violate the rule.
+- **`validationActions`**: Set to `Deny` to block non-compliant requests at admission time.
 - **`validate.pattern.spec.=(volumes)`**: Checks the volumes list.
 - **`X(hostPath): "null"`**: The `X()` validation pattern represents "must not exist". If any volume specifies a `hostPath` key, the pod creation request is denied.
 

@@ -2,7 +2,7 @@
 
 | Property | Value |
 |---|---|
-| **Type** | Kyverno (Mutation) |
+| **Type** | Kyverno (MutatingPolicy) |
 | **Kyverno Prevention** | Mutates pod specifications to change container image pull policies conditional on `:latest` image names. |
 | **Falco Detection** | N/A (Admission mutation). |
 
@@ -11,8 +11,8 @@ Ensures any container specifying the `:latest` tag is updated to use `imagePullP
 
 ## Kyverno Policy Manifest
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: MutatingPolicy
 metadata:
   name: mutate-image-pull-policy
   annotations:
@@ -25,22 +25,18 @@ metadata:
   labels:
     app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  rules:
-    - name: set-pull-always
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      mutate:
-        patchStrategicMerge:
-          spec:
-            containers:
-              - (image): "*:latest"
-                imagePullPolicy: "Always"
-            =(initContainers):
-              - (image): "*:latest"
-                imagePullPolicy: "Always"
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  mutations:
+    - patchStrategicMerge:
+        spec:
+          containers:
+            - (image): "*:latest"
+              imagePullPolicy: "Always"
 ```
 
 ## Detailed Explanation

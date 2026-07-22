@@ -2,7 +2,7 @@
 
 | Property | Value |
 |---|---|
-| **Type** | Kyverno (Mutation) |
+| **Type** | Kyverno (MutatingPolicy) |
 | **Kyverno Prevention** | Mutates namespaces to add enforcement and warning labels for pod security standards. |
 | **Falco Detection** | N/A (Metadata mutation, no corresponding runtime execution). |
 
@@ -11,8 +11,8 @@ Automatically adds Pod Security Standard labels (`pod-security.kubernetes.io/enf
 
 ## Kyverno Policy Manifest
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: MutatingPolicy
 metadata:
   name: add-pss-labels
   annotations:
@@ -25,35 +25,27 @@ metadata:
   labels:
     app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  rules:
-    - name: add-pss-baseline
-      match:
-        any:
-          - resources:
-              kinds:
-                - Namespace
-      exclude:
-        any:
-          - resources:
-              namespaces:
-                - kube-system
-                - kube-public
-                - kube-node-lease
-      mutate:
-        patchStrategicMerge:
-          metadata:
-            labels:
-              pod-security.kubernetes.io/enforce: "baseline"
-              pod-security.kubernetes.io/enforce-version: "latest"
-              pod-security.kubernetes.io/warn: "restricted"
-              pod-security.kubernetes.io/warn-version: "latest"
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE]
+        resources: [namespaces]
+  mutations:
+    - patchStrategicMerge:
+        metadata:
+          labels:
+            pod-security.kubernetes.io/enforce: "baseline"
+            pod-security.kubernetes.io/enforce-version: "latest"
+            pod-security.kubernetes.io/warn: "restricted"
+            pod-security.kubernetes.io/warn-version: "latest"
 ```
 
 ## Detailed Explanation
 ### Kyverno Policy Manifest Explanation
 The policy modifies `Namespace` objects at creation time:
 - **`metadata.name: add-pss-labels`**: The policy name.
-- **`rules[0].match.any.resources.kinds: [Namespace]`**: Restricts this rule to trigger only when a Namespace is created or updated.
+- **`matchConstraints`**: Specifies target resources and operations (e.g. Pods/Namespaces on CREATE/UPDATE).
 - **`rules[0].exclude`**: Prevents the mutation of system namespaces (`kube-system`, `kube-public`, `kube-node-lease`) to avoid breaking existing system-critical configurations.
 - **`rules[0].mutate`**: Applies a patch using `patchStrategicMerge`.
 - **`metadata.labels`**: Injects labels that enable Kubernetes native Pod Security Admission:

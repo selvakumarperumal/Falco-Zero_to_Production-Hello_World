@@ -2,7 +2,7 @@
 
 | Property | Value |
 |---|---|
-| **Type** | Kyverno (Validation) |
+| **Type** | Kyverno (ValidatingPolicy) |
 | **Kyverno Prevention** | Validates the presence of keys matching `app.kubernetes.io/name` inside the pod metadata labels block. |
 | **Falco Detection** | N/A (Metadata compliance control). |
 
@@ -11,8 +11,8 @@ Enforces organizational metadata compliance by validating that all submitted pod
 
 ## Kyverno Policy Manifest
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: require-labels
   annotations:
@@ -24,26 +24,24 @@ metadata:
   labels:
     app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Audit
-  rules:
-    - name: require-app-label
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      validate:
-        message: "The label 'app.kubernetes.io/name' is required."
-        pattern:
-          metadata:
-            labels:
-              app.kubernetes.io/name: "?*"
+  validationActions:
+    - Audit
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "The label 'app.kubernetes.io/name' is required."
+      expression: >-
+        has(object.metadata.labels) && 'app.kubernetes.io/name' in object.metadata.labels && object.metadata.labels['app.kubernetes.io/name'] != ''
 ```
 
 ## Detailed Explanation
 ### Kyverno Policy Manifest Explanation
 The validation enforces standard labelling requirements:
-- **`validationFailureAction: Audit`**: Allows non-compliant pods to boot, but flags them in `PolicyReport` for compliance scanning.
+- **`validationActions`**: Set to `Deny` to block non-compliant requests at admission time.
 - **`validate.pattern.metadata.labels`**:
   - `app.kubernetes.io/name: "?*"`: Evaluates labels. The `?*` pattern means the label must be present and contain at least one character.
 

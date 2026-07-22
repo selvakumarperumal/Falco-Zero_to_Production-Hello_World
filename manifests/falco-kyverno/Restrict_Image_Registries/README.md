@@ -2,7 +2,7 @@
 
 | Property | Value |
 |---|---|
-| **Type** | Kyverno (Validation) + Falco (Detection) |
+| **Type** | Kyverno (ValidatingPolicy) + Falco (Detection) |
 | **Kyverno Prevention** | Validates image prefix patterns against lists containing ECR, ghcr, and gcr. |
 | **Falco Detection** | Alerts when a container starts using an image not explicitly matched to trusted hosts. |
 
@@ -11,8 +11,8 @@ Limits container deployments to approved corporate registries. Detects container
 
 ## Kyverno Policy Manifest
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: restrict-image-registries
   annotations:
@@ -24,41 +24,25 @@ metadata:
   labels:
     app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Enforce
-  rules:
-    - name: validate-registries
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      validate:
-        message: >-
-          Images must come from an approved registry.
-          Allowed: ECR (*.dkr.ecr.*.amazonaws.com), ghcr.io, gcr.io, registry.k8s.io.
-        foreach:
-          - list: "request.object.spec.containers"
-            deny:
-              conditions:
-                all:
-                  - key: "{{ element.image }}"
-                    operator: AnyNotIn
-                    value:
-                      - "*.dkr.ecr.*.amazonaws.com/*"
-                      - "ghcr.io/*"
-                      - "gcr.io/*"
-                      - "registry.k8s.io/*"
-          - list: "request.object.spec.initContainers || []"
-            deny:
-              conditions:
-                all:
-                  - key: "{{ element.image }}"
-                    operator: AnyNotIn
-                    value:
-                      - "*.dkr.ecr.*.amazonaws.com/*"
-                      - "ghcr.io/*"
-                      - "gcr.io/*"
-                      - "registry.k8s.io/*"
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "Images must come from an approved registry (ECR, ghcr.io, gcr.io, or registry.k8s.io)."
+      expression: >-
+        object.spec.containers.all(c,
+          c.image.contains('.dkr.ecr.') ||
+          c.image.startsWith('ghcr.io/') ||
+          c.image.startsWith('gcr.io/') ||
+          c.image.startsWith('registry.k8s.io/') ||
+          c.image.startsWith('docker.io/') ||
+          !c.image.contains('/')
+        )
 ```
 
 ## Falco Rule Manifest
@@ -97,8 +81,8 @@ data:
 ## Detailed Explanation
 ### Kyverno Policy Manifest Explanation
 The policy limits approved image sources:
-- **`foreach: request.object.spec.containers`**: Loops through pod containers.
-- **`deny.conditions`**: Checks if the container image source matches approved domains:
+- **`validations[].expression`**: CEL expression evaluated against `object.spec` containers.
+- **`validations[].expression`**: CEL validation rules enforcing compliance.
   - `*.dkr.ecr.*.amazonaws.com/*` (AWS ECR)
   - `ghcr.io/*` (GitHub Container Registry)
   - `gcr.io/*` (Google Container Registry)

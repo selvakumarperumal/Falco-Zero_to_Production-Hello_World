@@ -2,7 +2,7 @@
 
 | Property | Value |
 |---|---|
-| **Type** | Kyverno (Validation) + Falco (Detection) |
+| **Type** | Kyverno (ValidatingPolicy) + Falco (Detection) |
 | **Kyverno Prevention** | Ensures `ALL` is listed in the dropped capabilities array of container definitions. |
 | **Falco Detection** | Monitors syscalls indicating dangerous capability manipulation. |
 
@@ -11,8 +11,8 @@ Enforces the best practice of dropping all default Linux capabilities on contain
 
 ## Kyverno Policy Manifest
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: drop-all-capabilities
   annotations:
@@ -25,24 +25,23 @@ metadata:
   labels:
     app.kubernetes.io/part-of: kyverno-falco-policies
 spec:
-  validationFailureAction: Enforce
-  rules:
-    - name: require-drop-all
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-      validate:
-        message: "Containers must drop ALL capabilities."
-        foreach:
-          - list: "request.object.spec.containers"
-            deny:
-              conditions:
-                all:
-                  - key: ALL
-                    operator: AnyNotIn
-                    value: "{{ element.securityContext.capabilities.drop || `[]` }}"
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - message: "Containers must drop ALL capabilities."
+      expression: >-
+        object.spec.containers.all(c,
+          has(c.securityContext) &&
+          has(c.securityContext.capabilities) &&
+          has(c.securityContext.capabilities.drop) &&
+          c.securityContext.capabilities.drop.contains('ALL')
+        )
 ```
 
 ## Falco Rule Manifest
@@ -79,8 +78,8 @@ data:
 ## Detailed Explanation
 ### Kyverno Policy Manifest Explanation
 The policy locks down OS-level capabilities:
-- **`foreach: request.object.spec.containers`**: Iterates through each container in the spec.
-- **`deny.conditions`**: Checks if the capability `ALL` is dropped. If it is not present in the dropped list, Kyverno denies the pod creation.
+- **`validations[].expression`**: CEL expression evaluated against `object.spec` containers.
+- **`validations[].expression`**: CEL validation rules enforcing compliance.
 
 ### Falco Rule Manifest Explanation
 The runtime rule monitors execution of kernel manipulation commands:
