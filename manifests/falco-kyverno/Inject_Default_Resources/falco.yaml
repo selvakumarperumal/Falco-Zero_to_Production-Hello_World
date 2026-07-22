@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-custom-rules
+  namespace: falco
+  labels:
+    app.kubernetes.io/part-of: falco
+    app.kubernetes.io/component: custom-rules
+data:
+  falco-kyverno-rules.yaml: |-
+    - rule: Unconstrained Resource Container Executed
+      desc: >
+        Detects a container process running without CPU or memory resource
+        limits defined in Kubernetes spec.
+      source: syscall
+      condition: >
+        evt.type = execve and evt.dir = < and
+        container and
+        not k8s.ns.name in (kube-system, kyverno, falco)
+      output: >
+        Unconstrained resource container process started
+        (command=%proc.cmdline pod=%k8s.pod.name ns=%k8s.ns.name
+        image=%container.image.repository user=%user.name)
+      priority: WARNING
+      tags: [kyverno_companion, resource_management, mitre_resource_hijacking]

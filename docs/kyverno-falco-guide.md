@@ -621,7 +621,7 @@ spec:
           has(c.securityContext) &&
           has(c.securityContext.capabilities) &&
           has(c.securityContext.capabilities.drop) &&
-          c.securityContext.capabilities.drop.contains('ALL')
+          c.securityContext.capabilities.drop.exists(x, x == 'ALL')
         )
 ```
 
@@ -1497,3 +1497,134 @@ Some policies need tuning before enforcement:
 | Check Kyverno policy status | `kubectl get clusterpolicies` |
 | Test a policy (dry run) | `kubectl apply -f test-pod.yaml --dry-run=server` |
 | View Kyverno logs | `kubectl logs -l app.kubernetes.io/component=admission-controller -n kyverno` |
+
+
+---
+
+## 9. Mastering MutatingPolicy & GitOps Integration (ArgoCD & Flux)
+
+> **Official Kyverno Reference:** [Kyverno MutatingPolicy GitOps Considerations](https://kyverno.io/docs/policy-types/mutating-policy/#gitops-considerations)
+
+### The GitOps Mutation Conflict Problem
+
+When running GitOps tools like **ArgoCD** or **Flux**, the controller continuously compares live cluster objects against target manifests stored in Git.
+
+If a Kyverno **`MutatingPolicy`** mutates incoming objects at admission time (e.g. injecting default resource requests, adding security labels, or setting `imagePullPolicy: Always`), the live state in Kubernetes will contain fields that **do not exist in your Git repository**.
+
+```
+┌────────────────────────┐      GitOps Sync      ┌────────────────────────┐
+│ Git Manifest (No limits)├─────────────────────►│  Live Cluster Object   │
+└────────────────────────┘                      └───────────┬────────────┘
+                                                            │ Mutated at admission
+                                                            ▼
+                                                ┌────────────────────────┐
+                                                │ Kyverno MutatingPolicy │
+                                                │ (Injected 100m CPU)    │
+                                                └───────────┬────────────┘
+                                                            │
+                                  ArgoCD Drift Detected    │
+                                ◄──────────────────────────┘
+                                Status: OutOfSync / Reverting
+```
+
+Without proper GitOps configurations:
+1. ArgoCD marks the application status as **`OutOfSync`**.
+2. If Auto-Sync / Self-Healing is enabled, ArgoCD attempts to revert the mutated fields to match Git.
+3. Kyverno re-mutates the pod on subsequent updates, creating an infinite **reconciliation loop**.
+
+---
+
+### Solution 1: Configure ArgoCD `ignoreDifferences`
+
+Tell ArgoCD to ignore specific paths populated dynamically by Kyverno:
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-workloads
+  namespace: argocd
+spec:
+  ignoreDifferences:
+    # Ignore resource requests mutated by Kyverno
+    - group: ""
+      kind: Pod
+      jsonPointers:
+        - /spec/containers/0/resources/requests
+    # Ignore PSS labels added to Namespaces
+    - group: ""
+      kind: Namespace
+      jsonPointers:
+        - /metadata/labels/pod-security.kubernetes.io~1enforce
+        - /metadata/labels/pod-security.kubernetes.io~1warn
+```
+
+---
+
+### Solution 2: Enable `RespectIgnoreDifferences=true`
+
+In ArgoCD v2.6+, enable `RespectIgnoreDifferences=true` in `syncOptions` to prevent automated self-healing from overriding fields specified in `ignoreDifferences`:
+
+```yaml
+spec:
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - RespectIgnoreDifferences=true
+```
+
+---
+
+### Real-Time Example: Inject Default Resource Requests (`Inject_Default_Resources`)
+
+**Why it matters:** Ensures every container gets baseline CPU (`100m`) and memory (`128Mi`) requests to protect node capacity, while allowing developers to omit verbose resource blocks in developer manifests.
+
+#### Kyverno MutatingPolicy (`policies.kyverno.io/v1` CEL)
+
+```yaml
+apiVersion: policies.kyverno.io/v1
+kind: MutatingPolicy
+metadata:
+  name: inject-default-resources
+  annotations:
+    policies.kyverno.io/title: Inject Default Resource Requests
+    policies.kyverno.io/category: Resource Management
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Automatically mutates pod specs to inject baseline CPU (100m) and memory
+      (128Mi) requests for containers that omit resource requests.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  mutations:
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >-
+          Object{
+            spec: Object.spec{
+              containers: object.spec.containers.map(c,
+                !has(c.resources) || !has(c.resources.requests) ?
+                  Object.spec.containers{
+                    name: c.name,
+                    resources: Object.spec.containers.resources{
+                      requests: {
+                        "cpu": "100m",
+                        "memory": "128Mi"
+                      }
+                    }
+                  } :
+                  Object.spec.containers{
+                    name: c.name
+                  }
+              )
+            }
+          }
+```

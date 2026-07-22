@@ -40,7 +40,7 @@ spec:
           has(c.securityContext) &&
           has(c.securityContext.capabilities) &&
           has(c.securityContext.capabilities.drop) &&
-          c.securityContext.capabilities.drop.contains('ALL')
+          c.securityContext.capabilities.drop.exists(x, x == 'ALL')
         )
 ```
 

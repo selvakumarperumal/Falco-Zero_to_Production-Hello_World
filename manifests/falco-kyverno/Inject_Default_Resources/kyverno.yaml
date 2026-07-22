@@ -1,0 +1,43 @@
+apiVersion: policies.kyverno.io/v1
+kind: MutatingPolicy
+metadata:
+  name: inject-default-resources
+  annotations:
+    policies.kyverno.io/title: Inject Default Resource Requests
+    policies.kyverno.io/category: Resource Management
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Automatically mutates pod specs to inject baseline CPU (100m) and memory
+      (128Mi) requests for containers that omit resource requests.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  mutations:
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >-
+          Object{
+            spec: Object.spec{
+              containers: object.spec.containers.map(c,
+                !has(c.resources) || !has(c.resources.requests) ?
+                  Object.spec.containers{
+                    name: c.name,
+                    resources: Object.spec.containers.resources{
+                      requests: {
+                        "cpu": "100m",
+                        "memory": "128Mi"
+                      }
+                    }
+                  } :
+                  Object.spec.containers{
+                    name: c.name
+                  }
+              )
+            }
+          }
