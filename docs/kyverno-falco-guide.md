@@ -1018,17 +1018,21 @@ spec:
         operations: [CREATE]
         resources: [namespaces]
   generate:
-    apiVersion: networking.k8s.io/v1
-    kind: NetworkPolicy
-    name: default-deny-all
-    namespace: "{{ request.object.metadata.name }}"
-    synchronize: true
-    data:
-      spec:
-        podSelector: {}
-        policyTypes:
-          - Ingress
-          - Egress
+    - expression: >-
+        generator.Apply(object.metadata.name, [
+          {
+            "apiVersion": dyn("networking.k8s.io/v1"),
+            "kind": dyn("NetworkPolicy"),
+            "metadata": dyn({
+              "name": dyn("default-deny-all"),
+              "namespace": dyn(object.metadata.name)
+            }),
+            "spec": dyn({
+              "podSelector": dyn({}),
+              "policyTypes": dyn(["Ingress", "Egress"])
+            })
+          }
+        ])
 ```
 
 **What `synchronize: true` means:** If you update the Kyverno policy, the generated NetworkPolicy in every namespace also updates. If someone deletes the generated NetworkPolicy, Kyverno recreates it.
