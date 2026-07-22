@@ -1,0 +1,41 @@
+apiVersion: policies.kyverno.io/v1
+kind: MutatingPolicy
+metadata:
+  name: inject-sidecar-proxy
+  annotations:
+    policies.kyverno.io/title: Inject Logging Sidecar Container
+    policies.kyverno.io/category: Observability
+    policies.kyverno.io/severity: low
+    policies.kyverno.io/description: >-
+      Automatically injects a Fluent Bit logging sidecar container into pods
+      annotated with sidecar.kyverno.io/inject=true. Uses CEL JSONPatch
+      mutation with matchConditions for annotation-based opt-in.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ['']
+        apiVersions: ['v1']
+        operations: [CREATE]
+        resources: [pods]
+  matchConditions:
+    - name: has-sidecar-annotation
+      expression: >-
+        has(object.metadata.annotations) &&
+        'sidecar.kyverno.io/inject' in object.metadata.annotations &&
+        object.metadata.annotations['sidecar.kyverno.io/inject'] == 'true'
+  mutations:
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          JSONPatch{op: "add", path: "/spec/containers/-",
+            value: Object.spec.containers{
+              name: "log-sidecar",
+              image: "fluent/fluent-bit:3.2",
+              resources: Object.spec.containers.resources{
+                requests: {"cpu": "50m", "memory": "64Mi"},
+                limits: {"cpu": "100m", "memory": "128Mi"}
+              }
+            }
+          }

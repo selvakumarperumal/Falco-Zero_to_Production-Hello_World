@@ -1013,26 +1013,31 @@ metadata:
 spec:
   matchConstraints:
     resourceRules:
-      - apiGroups: [""]
-        apiVersions: ["v1"]
+      - apiGroups: ['']
+        apiVersions: ['v1']
         operations: [CREATE]
         resources: [namespaces]
-  generate:
-    - expression: >-
-        generator.Apply(object.metadata.name, [
+  variables:
+    - name: nsName
+      expression: 'object.metadata.name'
+    - name: downstream
+      expression: >-
+        [
           {
             "apiVersion": dyn("networking.k8s.io/v1"),
             "kind": dyn("NetworkPolicy"),
             "metadata": dyn({
-              "name": dyn("default-deny-all"),
-              "namespace": dyn(object.metadata.name)
+              "name": "default-deny-all",
+              "namespace": string(variables.nsName)
             }),
             "spec": dyn({
               "podSelector": dyn({}),
               "policyTypes": dyn(["Ingress", "Egress"])
             })
           }
-        ])
+        ]
+  generate:
+    - expression: generator.Apply(variables.nsName, variables.downstream)
 ```
 
 **What `synchronize: true` means:** If you update the Kyverno policy, the generated NetworkPolicy in every namespace also updates. If someone deletes the generated NetworkPolicy, Kyverno recreates it.
@@ -1458,33 +1463,41 @@ Some policies need tuning before enforcement:
 
 ## 8. Quick Reference
 
-### All 23 examples at a glance
+### All 30 examples at a glance
 
-| # | Policy Name | Type | Mode | Kyverno | Falco |
+| # | Policy Name | Type | Kind | Kyverno | Falco |
 |---|---|---|---|---|---|
-| 1 | Privileged Containers | Validate | Enforce | ✅ | ✅ |
-| 2 | Host Namespaces | Validate | Enforce | ✅ | ✅ |
-| 3 | Non-Root User | Validate | Enforce | ✅ | ✅ |
-| 4 | Image Registries | Validate | Enforce | ✅ | ✅ |
-| 5 | Latest Tag | Validate | Enforce | ✅ | ✅ |
-| 6 | Resource Limits | Validate | Enforce | ✅ | ✅ |
-| 7 | Read-Only Root FS | Validate | Audit | ✅ | ✅ |
-| 8 | Drop Capabilities | Validate | Enforce | ✅ | ✅ |
-| 9 | Privilege Escalation | Validate | Enforce | ✅ | ✅ |
-| 10 | HostPath Volumes | Validate | Enforce | ✅ | ✅ |
-| 11 | SA Token Mount | Validate | Audit | ✅ | ✅ |
-| 12 | NodePort Services | Validate | Enforce | ✅ | ✅ |
-| 13 | Health Probes | Validate | Audit | ✅ | ✅ |
-| 14 | Standard Labels | Validate | Audit | ✅ | — |
-| 15 | Network Policy | Generate | — | ✅ | ✅ |
-| 16 | Image Pull Policy | Mutate | — | ✅ | — |
-| 17 | PSS Labels | Mutate | — | ✅ | — |
+| 1 | Privileged Containers | Validate | ValidatingPolicy | ✅ | ✅ |
+| 2 | Host Namespaces | Validate | ValidatingPolicy | ✅ | ✅ |
+| 3 | Non-Root User | Validate | ValidatingPolicy | ✅ | ✅ |
+| 4 | Image Registries | Validate | ValidatingPolicy | ✅ | ✅ |
+| 5 | Latest Tag | Validate | ValidatingPolicy | ✅ | ✅ |
+| 6 | Resource Limits | Validate | ValidatingPolicy | ✅ | ✅ |
+| 7 | Read-Only Root FS | Validate | ValidatingPolicy | ✅ | ✅ |
+| 8 | Drop Capabilities | Validate | ValidatingPolicy | ✅ | ✅ |
+| 9 | Privilege Escalation | Validate | ValidatingPolicy | ✅ | ✅ |
+| 10 | HostPath Volumes | Validate | ValidatingPolicy | ✅ | ✅ |
+| 11 | SA Token Mount | Validate | ValidatingPolicy | ✅ | ✅ |
+| 12 | NodePort Services | Validate | ValidatingPolicy | ✅ | ✅ |
+| 13 | Health Probes | Validate | ValidatingPolicy | ✅ | ✅ |
+| 14 | Standard Labels | Validate | ValidatingPolicy | ✅ | — |
+| 15 | Network Policy | Generate | GeneratingPolicy | ✅ | ✅ |
+| 16 | Image Pull Policy | Mutate | MutatingPolicy | ✅ | — |
+| 17 | PSS Labels | Mutate | MutatingPolicy | ✅ | — |
 | 18 | Shell in Container | — | — | — | ✅ |
 | 19 | Crypto Mining | — | — | — | ✅ |
 | 20 | Sensitive File Access | — | — | — | ✅ |
 | 21 | Log Tampering | — | — | — | ✅ |
 | 22 | Symlink Attacks | — | — | — | ✅ |
 | 23 | Reverse Shell | — | — | — | ✅ |
+| 24 | Inject Default Resources | Mutate | MutatingPolicy | ✅ | ✅ |
+| 25 | Cleanup Completed Jobs | Delete | **DeletingPolicy** | ✅ | — |
+| 26 | Cleanup Failed Pods | Delete | **DeletingPolicy** | ✅ | — |
+| 27 | Verify Image Signatures | Image Validate | **ImageValidatingPolicy** | ✅ | — |
+| 28 | Clone Registry Secret | Generate | GeneratingPolicy | ✅ | — |
+| 29 | Require HA Replicas | Validate | ValidatingPolicy | ✅ | — |
+| 30 | Inject Sidecar Proxy | Mutate | MutatingPolicy | ✅ | — |
+
 
 ### Quick commands
 
@@ -1628,3 +1641,344 @@ spec:
             }
           }
 ```
+
+---
+
+### Example 25 — Cleanup Completed Jobs (DeletingPolicy)
+
+**Why it matters:** Completed Jobs accumulate over time, consuming etcd storage and cluttering namespace listings. This policy automatically removes them on a cron schedule.
+
+> **New Policy Type: `DeletingPolicy`** — Not an admission webhook. Runs as a cron-scheduled background job managed by the Kyverno cleanup controller.
+
+#### Kyverno Policy (Deletion)
+
+```yaml
+apiVersion: policies.kyverno.io/v1
+kind: DeletingPolicy
+metadata:
+  name: cleanup-completed-jobs
+  annotations:
+    policies.kyverno.io/title: Cleanup Completed Jobs
+    policies.kyverno.io/category: Cluster Hygiene
+    policies.kyverno.io/severity: low
+    policies.kyverno.io/description: >-
+      Automatically deletes completed Kubernetes Jobs daily at 2 AM UTC
+      to prevent stale resources from accumulating in the cluster.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  schedule: '0 2 * * *'
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ['batch']
+        apiVersions: ['v1']
+        resources: ['jobs']
+  conditions:
+    - name: is-completed
+      expression: >-
+        object.status.conditions.exists(c,
+          c.type == 'Complete' && c.status == 'True')
+```
+
+**Key concepts:**
+- `schedule: '0 2 * * *'` — Standard cron expression (daily at 2 AM UTC).
+- `conditions` — CEL expressions evaluated per resource. All must return `true` for deletion.
+- `.exists(c, ...)` — CEL list macro: `true` if at least one element matches.
+
+---
+
+### Example 26 — Cleanup Failed Pods (DeletingPolicy)
+
+**Why it matters:** Pods in `Failed` phase (OOMKilled, evicted, ImagePullBackOff) remain indefinitely unless manually deleted.
+
+#### Kyverno Policy (Deletion)
+
+```yaml
+apiVersion: policies.kyverno.io/v1
+kind: DeletingPolicy
+metadata:
+  name: cleanup-failed-pods
+  annotations:
+    policies.kyverno.io/title: Cleanup Failed Pods
+    policies.kyverno.io/category: Cluster Hygiene
+    policies.kyverno.io/severity: low
+    policies.kyverno.io/description: >-
+      Automatically deletes pods in Failed phase every 6 hours to prevent
+      stale failed pods from consuming cluster resources and cluttering
+      namespace listings.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  schedule: '0 */6 * * *'
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ['']
+        apiVersions: ['v1']
+        resources: ['pods']
+  conditions:
+    - name: is-failed
+      expression: "object.status.phase == 'Failed'"
+```
+
+---
+
+### Example 27 — Verify Image Signatures (ImageValidatingPolicy)
+
+**Why it matters:** Supply chain attacks targeting container images are a critical threat. This policy cryptographically verifies that images are signed before admission.
+
+> **New Policy Type: `ImageValidatingPolicy`** — Provides CEL functions for image verification (`verifyImageSignatures`, `verifyAttestationSignatures`, `extractPayload`) not available in standard `ValidatingPolicy`.
+
+#### Kyverno Policy (Image Validation)
+
+```yaml
+apiVersion: policies.kyverno.io/v1
+kind: ImageValidatingPolicy
+metadata:
+  name: verify-image-signatures
+  annotations:
+    policies.kyverno.io/title: Verify Image Signatures
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: critical
+    policies.kyverno.io/description: >-
+      Verifies that all container images from approved registries are signed
+      using Cosign. Unsigned images are rejected to prevent supply chain
+      tampering attacks.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  webhookConfiguration:
+    timeoutSeconds: 15
+  validationActions: [Audit]
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ['']
+        apiVersions: ['v1']
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  matchImageReferences:
+    - glob: 'ghcr.io/*'
+  attestors:
+    - name: cosign
+      cosign:
+        key:
+          data: |
+            -----BEGIN PUBLIC KEY-----
+            REPLACE_WITH_YOUR_COSIGN_PUBLIC_KEY
+            -----END PUBLIC KEY-----
+  validations:
+    - expression: >-
+        images.containers.map(image,
+          verifyImageSignatures(image, [attestors.cosign])
+        ).all(e, e > 0)
+      message: "Image signature verification failed. All images must be signed with Cosign."
+```
+
+**Key CEL functions:**
+- `images.containers` — Returns list of container images in the pod spec.
+- `verifyImageSignatures(image, [attestors])` — Returns count of verified signatures (> 0 = verified).
+- `verifyAttestationSignatures(image, attestation, [attestors])` — Verifies attestation signatures.
+- `extractPayload(image, attestation)` — Extracts in-toto attestation payload.
+
+---
+
+### Example 28 — Clone Registry Pull Secret (GeneratingPolicy — Clone Source Mode)
+
+**Why it matters:** Every namespace needs `imagePullSecrets` for private registries. This policy automatically clones a source secret into new namespaces using `resource.Get()` and keeps it synchronized.
+
+#### Kyverno Policy (Generation)
+
+```yaml
+apiVersion: policies.kyverno.io/v1
+kind: GeneratingPolicy
+metadata:
+  name: clone-registry-secret
+  annotations:
+    policies.kyverno.io/title: Clone Registry Pull Secret
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Automatically clones an image pull secret from the default namespace
+      into every newly created namespace. Uses resource.Get() to fetch the
+      source secret and generator.Apply() to create it in the target namespace.
+      Synchronization keeps the cloned secret in sync with the source.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  evaluation:
+    synchronize:
+      enabled: true
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ['']
+        apiVersions: ['v1']
+        operations: [CREATE]
+        resources: [namespaces]
+  variables:
+    - name: targetNs
+      expression: 'object.metadata.name'
+    - name: sourceSecret
+      expression: resource.Get("v1", "secrets", "default", "regcred")
+  generate:
+    - expression: generator.Apply(variables.targetNs, [variables.sourceSecret])
+```
+
+**Key CEL functions:**
+- `resource.Get(apiVersion, resourcePlural, namespace, name)` — Fetches a single source resource.
+- `resource.List(apiVersion, resourcePlural, namespace)` — Fetches a list of resources.
+- `generator.Apply(namespace, [resources])` — Creates/updates resources in the target namespace.
+
+**Clone Source vs Data Source:**
+
+| Mode | When to Use | Pattern |
+|---|---|---|
+| Clone Source | Copy existing resource | `resource.Get()` → `generator.Apply()` |
+| Data Source | Create from inline data | `dyn({...})` → `generator.Apply()` |
+
+---
+
+### Example 29 — Require HA Replicas in Production (ValidatingPolicy — Advanced CEL)
+
+**Why it matters:** Single-replica Deployments in production cause complete downtime on pod failure. This policy uses `matchConditions` with `namespaceObject` and `messageExpression` for dynamic denial messages.
+
+#### Kyverno Policy (Validation)
+
+```yaml
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: require-ha-replicas
+  annotations:
+    policies.kyverno.io/title: Require HA Replicas in Production
+    policies.kyverno.io/category: Best Practices
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Enforces that Deployments in production namespaces have at least 2
+      replicas for high availability. Uses matchConditions to scope to
+      namespaces labeled environment=production and messageExpression for
+      dynamic denial messages.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationActions: [Deny]
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [deployments]
+  matchConditions:
+    - name: is-production
+      expression: >-
+        has(namespaceObject.metadata.labels) &&
+        'environment' in namespaceObject.metadata.labels &&
+        namespaceObject.metadata.labels['environment'] == 'production'
+  validations:
+    - expression: 'object.spec.replicas >= 2'
+      messageExpression: >-
+        "Deployment " + object.metadata.name + " has " +
+        string(object.spec.replicas) + " replica(s). Minimum 2 required for HA in production."
+      message: "Production deployments must have at least 2 replicas."
+```
+
+**Advanced CEL features:**
+- `namespaceObject` — Built-in variable referencing the namespace of the target resource.
+- `matchConditions` — CEL pre-filter: policy only fires if ALL conditions return `true`.
+- `messageExpression` — Dynamic CEL string with `string()` type casting. Overrides static `message`.
+
+---
+
+### Example 30 — Inject Logging Sidecar (MutatingPolicy — JSONPatch CEL)
+
+**Why it matters:** Centralized logging requires sidecar containers. This policy uses annotation-based opt-in with CEL `JSONPatch` mutation — an alternative to `ApplyConfiguration` for appending array elements.
+
+#### Kyverno Policy (Mutation)
+
+```yaml
+apiVersion: policies.kyverno.io/v1
+kind: MutatingPolicy
+metadata:
+  name: inject-sidecar-proxy
+  annotations:
+    policies.kyverno.io/title: Inject Logging Sidecar Container
+    policies.kyverno.io/category: Observability
+    policies.kyverno.io/severity: low
+    policies.kyverno.io/description: >-
+      Automatically injects a Fluent Bit logging sidecar container into pods
+      annotated with sidecar.kyverno.io/inject=true. Uses CEL JSONPatch
+      mutation with matchConditions for annotation-based opt-in.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ['']
+        apiVersions: ['v1']
+        operations: [CREATE]
+        resources: [pods]
+  matchConditions:
+    - name: has-sidecar-annotation
+      expression: >-
+        has(object.metadata.annotations) &&
+        'sidecar.kyverno.io/inject' in object.metadata.annotations &&
+        object.metadata.annotations['sidecar.kyverno.io/inject'] == 'true'
+  mutations:
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          JSONPatch{op: "add", path: "/spec/containers/-",
+            value: Object.spec.containers{
+              name: "log-sidecar",
+              image: "fluent/fluent-bit:3.2",
+              resources: Object.spec.containers.resources{
+                requests: {"cpu": "50m", "memory": "64Mi"},
+                limits: {"cpu": "100m", "memory": "128Mi"}
+              }
+            }
+          }
+```
+
+**CEL Mutation Types Compared:**
+
+| Patch Type | Best For | CEL Pattern |
+|---|---|---|
+| `ApplyConfiguration` | Modifying existing fields (labels, resources) | `Object{spec: Object.spec{...}}` |
+| `JSONPatch` | Adding/removing array elements (containers, volumes) | `JSONPatch{op: "add", path: "...", value: ...}` |
+
+---
+
+## 10. Kyverno Policy Type Reference
+
+### All 5 Policy Types (`policies.kyverno.io/v1`)
+
+| Kind | Purpose | Trigger | Key Fields |
+|---|---|---|---|
+| **ValidatingPolicy** | Block/audit non-compliant resources at admission | CREATE, UPDATE | `validations`, `matchConditions`, `variables`, `auditAnnotations` |
+| **MutatingPolicy** | Modify resources at admission (inject defaults, sidecars) | CREATE, UPDATE | `mutations` (`ApplyConfiguration` or `JSONPatch`), `matchConditions` |
+| **GeneratingPolicy** | Create downstream resources when triggers fire | CREATE, UPDATE | `generate`, `variables` with `resource.Get()`/`generator.Apply()` |
+| **DeletingPolicy** | Cron-scheduled cleanup of stale resources | Cron schedule | `schedule`, `conditions`, `deletionPropagationPolicy` |
+| **ImageValidatingPolicy** | Verify container image signatures and attestations | CREATE, UPDATE | `attestors`, `matchImageReferences`, `verifyImageSignatures()` |
+
+### Namespaced Variants
+
+Every policy type has a namespace-scoped variant: `NamespacedValidatingPolicy`, `NamespacedMutatingPolicy`, `NamespacedGeneratingPolicy`, `NamespacedDeletingPolicy`, `NamespacedImageValidatingPolicy`.
+
+### CEL Libraries Quick Reference
+
+| Function | Available In | Purpose |
+|---|---|---|
+| `object.spec.*` | All | Access the target resource spec |
+| `namespaceObject` | All admission types | Access the namespace object's metadata |
+| `has(field)` | All | Check if a field exists |
+| `.all(x, expr)` | All | List macro: all elements must match |
+| `.exists(x, expr)` | All | List macro: at least one element must match |
+| `.filter(x, expr)` | All | List macro: return matching elements |
+| `.map(x, expr)` | All | List macro: transform elements |
+| `string(value)` | All | Type cast to string |
+| `dyn(value)` | GeneratingPolicy | Dynamic type wrapper for resource dicts |
+| `resource.Get(apiVersion, kind, ns, name)` | GeneratingPolicy | Fetch a single cluster resource |
+| `resource.List(apiVersion, kind, ns)` | GeneratingPolicy | Fetch a list of cluster resources |
+| `generator.Apply(ns, [resources])` | GeneratingPolicy | Create/update resources in target namespace |
+| `images.containers` | ImageValidatingPolicy | List of container images |
+| `verifyImageSignatures(img, [attestors])` | ImageValidatingPolicy | Verify image signature (returns count) |
+| `verifyAttestationSignatures(img, att, [attestors])` | ImageValidatingPolicy | Verify attestation signature |
+| `extractPayload(img, att)` | ImageValidatingPolicy | Extract in-toto attestation payload |

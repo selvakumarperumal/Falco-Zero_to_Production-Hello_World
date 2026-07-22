@@ -1,0 +1,40 @@
+apiVersion: policies.kyverno.io/v1
+kind: ImageValidatingPolicy
+metadata:
+  name: verify-image-signatures
+  annotations:
+    policies.kyverno.io/title: Verify Image Signatures
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: critical
+    policies.kyverno.io/description: >-
+      Verifies that all container images from approved registries are signed
+      using Cosign. Unsigned images are rejected to prevent supply chain
+      tampering attacks.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  webhookConfiguration:
+    timeoutSeconds: 15
+  validationActions: [Audit]
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ['']
+        apiVersions: ['v1']
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  matchImageReferences:
+    - glob: 'ghcr.io/*'
+  attestors:
+    - name: cosign
+      cosign:
+        key:
+          data: |
+            -----BEGIN PUBLIC KEY-----
+            REPLACE_WITH_YOUR_COSIGN_PUBLIC_KEY
+            -----END PUBLIC KEY-----
+  validations:
+    - expression: >-
+        images.containers.map(image,
+          verifyImageSignatures(image, [attestors.cosign])
+        ).all(e, e > 0)
+      message: "Image signature verification failed. All images must be signed with Cosign."

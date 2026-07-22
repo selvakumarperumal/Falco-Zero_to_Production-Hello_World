@@ -1,0 +1,32 @@
+apiVersion: policies.kyverno.io/v1
+kind: GeneratingPolicy
+metadata:
+  name: clone-registry-secret
+  annotations:
+    policies.kyverno.io/title: Clone Registry Pull Secret
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Automatically clones an image pull secret from the default namespace
+      into every newly created namespace. Uses resource.Get() to fetch the
+      source secret and generator.Apply() to create it in the target namespace.
+      Synchronization keeps the cloned secret in sync with the source.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  evaluation:
+    synchronize:
+      enabled: true
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ['']
+        apiVersions: ['v1']
+        operations: [CREATE]
+        resources: [namespaces]
+  variables:
+    - name: targetNs
+      expression: 'object.metadata.name'
+    - name: sourceSecret
+      expression: resource.Get("v1", "secrets", "default", "regcred")
+  generate:
+    - expression: generator.Apply(variables.targetNs, [variables.sourceSecret])

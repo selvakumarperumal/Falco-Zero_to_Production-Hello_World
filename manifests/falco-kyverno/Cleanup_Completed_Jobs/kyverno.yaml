@@ -1,0 +1,25 @@
+apiVersion: policies.kyverno.io/v1
+kind: DeletingPolicy
+metadata:
+  name: cleanup-completed-jobs
+  annotations:
+    policies.kyverno.io/title: Cleanup Completed Jobs
+    policies.kyverno.io/category: Cluster Hygiene
+    policies.kyverno.io/severity: low
+    policies.kyverno.io/description: >-
+      Automatically deletes completed Kubernetes Jobs daily at 2 AM UTC
+      to prevent stale resources from accumulating in the cluster.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  schedule: '0 2 * * *'
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ['batch']
+        apiVersions: ['v1']
+        resources: ['jobs']
+  conditions:
+    - name: is-completed
+      expression: >-
+        object.status.conditions.exists(c,
+          c.type == 'Complete' && c.status == 'True')

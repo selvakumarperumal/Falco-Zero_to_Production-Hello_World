@@ -1,0 +1,35 @@
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: require-ha-replicas
+  annotations:
+    policies.kyverno.io/title: Require HA Replicas in Production
+    policies.kyverno.io/category: Best Practices
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Enforces that Deployments in production namespaces have at least 2
+      replicas for high availability. Uses matchConditions to scope to
+      namespaces labeled environment=production and messageExpression for
+      dynamic denial messages.
+  labels:
+    app.kubernetes.io/part-of: kyverno-falco-policies
+spec:
+  validationActions: [Deny]
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [deployments]
+  matchConditions:
+    - name: is-production
+      expression: >-
+        has(namespaceObject.metadata.labels) &&
+        'environment' in namespaceObject.metadata.labels &&
+        namespaceObject.metadata.labels['environment'] == 'production'
+  validations:
+    - expression: 'object.spec.replicas >= 2'
+      messageExpression: >-
+        "Deployment " + object.metadata.name + " has " +
+        string(object.spec.replicas) + " replica(s). Minimum 2 required for HA in production."
+      message: "Production deployments must have at least 2 replicas."
