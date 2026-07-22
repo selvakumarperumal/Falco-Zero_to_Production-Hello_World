@@ -1088,11 +1088,23 @@ spec:
         operations: [CREATE, UPDATE]
         resources: [pods]
   mutations:
-    - patchStrategicMerge:
-        spec:
-          containers:
-            - (image): "*:latest"
-              imagePullPolicy: "Always"
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >-
+          Object{
+            spec: Object.spec{
+              containers: object.spec.containers.map(c,
+                c.image.endsWith(':latest') || !c.image.contains(':') ?
+                  Object.spec.containers{
+                    name: c.name,
+                    imagePullPolicy: 'Always'
+                  } :
+                  Object.spec.containers{
+                    name: c.name
+                  }
+              )
+            }
+          }
 ```
 
 **What `(image): "*:latest"` means:** The parentheses make `image` an anchor — "find containers where image matches `*:latest`, and apply this patch to those containers." It's a conditional mutation.
@@ -1129,13 +1141,19 @@ spec:
         operations: [CREATE]
         resources: [namespaces]
   mutations:
-    - patchStrategicMerge:
-        metadata:
-          labels:
-            pod-security.kubernetes.io/enforce: "baseline"
-            pod-security.kubernetes.io/enforce-version: "latest"
-            pod-security.kubernetes.io/warn: "restricted"
-            pod-security.kubernetes.io/warn-version: "latest"
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >-
+          Object{
+            metadata: Object.metadata{
+              labels: {
+                "pod-security.kubernetes.io/enforce": "baseline",
+                "pod-security.kubernetes.io/enforce-version": "latest",
+                "pod-security.kubernetes.io/warn": "restricted",
+                "pod-security.kubernetes.io/warn-version": "latest"
+              }
+            }
+          }
 ```
 
 > **No Falco companion** — PSS labels are namespace metadata. Runtime enforcement of the actual security controls is handled by Examples 1–9.

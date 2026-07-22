@@ -32,13 +32,19 @@ spec:
         operations: [CREATE]
         resources: [namespaces]
   mutations:
-    - patchStrategicMerge:
-        metadata:
-          labels:
-            pod-security.kubernetes.io/enforce: "baseline"
-            pod-security.kubernetes.io/enforce-version: "latest"
-            pod-security.kubernetes.io/warn: "restricted"
-            pod-security.kubernetes.io/warn-version: "latest"
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >-
+          Object{
+            metadata: Object.metadata{
+              labels: {
+                "pod-security.kubernetes.io/enforce": "baseline",
+                "pod-security.kubernetes.io/enforce-version": "latest",
+                "pod-security.kubernetes.io/warn": "restricted",
+                "pod-security.kubernetes.io/warn-version": "latest"
+              }
+            }
+          }
 ```
 
 ## Detailed Explanation

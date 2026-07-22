@@ -32,11 +32,23 @@ spec:
         operations: [CREATE, UPDATE]
         resources: [pods]
   mutations:
-    - patchStrategicMerge:
-        spec:
-          containers:
-            - (image): "*:latest"
-              imagePullPolicy: "Always"
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >-
+          Object{
+            spec: Object.spec{
+              containers: object.spec.containers.map(c,
+                c.image.endsWith(':latest') || !c.image.contains(':') ?
+                  Object.spec.containers{
+                    name: c.name,
+                    imagePullPolicy: 'Always'
+                  } :
+                  Object.spec.containers{
+                    name: c.name
+                  }
+              )
+            }
+          }
 ```
 
 ## Detailed Explanation
