@@ -28,7 +28,15 @@ module "eks" {
   # EKS Addons
   addons = {
     aws-ebs-csi-driver = {
-      most_recent = true
+      most_recent                 = true
+      resolve_conflicts_on_create = "OVERWRITE"
+      resolve_conflicts_on_update = "OVERWRITE"
+      pod_identity_association = [
+        {
+          role_arn        = module.ebs_csi_pod_identity.iam_role_arn
+          service_account = "ebs-csi-controller-sa"
+        }
+      ]
     }
     coredns = {
       most_recent = true
@@ -57,11 +65,3 @@ module "eks" {
   }
 }
 
-resource "aws_eks_pod_identity_association" "ebs_csi_pod_identity" {
-  cluster_name    = module.eks.cluster_name
-  namespace       = "kube-system"
-  service_account = "ebs-csi-controller-sa"
-  role_arn        = module.ebs_csi_pod_identity.iam_role_arn
-
-  depends_on = [module.eks]
-}
