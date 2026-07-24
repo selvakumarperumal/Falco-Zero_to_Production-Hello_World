@@ -29,7 +29,7 @@ data:
         Detects access to sensitive credential files from inside a
         container.
       condition: >
-        evt.type in (open, openat, openat2) and evt.dir = <
+        evt.type in (open, openat, openat2)
         and container
         and evt.is_open_read = true
         and (fd.name in (/etc/shadow, /etc/gshadow, /etc/master.passwd)

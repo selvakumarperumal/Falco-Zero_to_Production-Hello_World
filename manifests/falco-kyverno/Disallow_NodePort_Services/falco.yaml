@@ -16,7 +16,7 @@ data:
         Detects a container process binding to a port outside the expected
         application range (common for backdoors and reverse shells).
       condition: >
-        evt.type in (bind, listen) and evt.dir = <
+        evt.type in (bind, listen)
         and container
         and fd.sport != 0
         and not fd.sport in (80, 443, 8080, 8443, 3000, 5000, 9090)

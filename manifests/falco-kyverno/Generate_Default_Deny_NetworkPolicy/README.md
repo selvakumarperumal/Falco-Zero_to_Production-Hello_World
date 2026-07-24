@@ -74,7 +74,7 @@ data:
         Detects outbound network connections to destinations outside
         the cluster internal network ranges.
       condition: >
-        evt.type = connect and evt.dir = <
+        evt.type = connect
         and container
         and fd.typechar = 4
         and fd.ip != "0.0.0.0"
@@ -97,7 +97,7 @@ Kyverno generates zero-trust networking templates automatically:
 
 ### Falco Rule Manifest Explanation
 The runtime rule detects outbound network traversal:
-- **`evt.type = connect and evt.dir = <`**: Fires on completed outbound TCP/UDP connection requests.
+- **`evt.type = connect`**: Fires on completed outbound TCP/UDP connection requests.
 - **`fd.typechar = 4`**: Restricts targeting to IPv4 connections.
 - **`not fd.sip in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")`**: Ignores cluster private IP blocks. A connection to any public IP fires a `WARNING` alert indicating potential exfiltration.
 

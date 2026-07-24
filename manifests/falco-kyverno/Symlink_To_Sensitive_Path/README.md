@@ -29,7 +29,7 @@ data:
         Detects creation of symbolic links pointing to sensitive paths,
         which is a common container escape technique (CVE-2021-25741).
       condition: >
-        evt.type in (symlink, symlinkat) and evt.dir = <
+        evt.type in (symlink, symlinkat)
         and container
         and (evt.arg.target startswith "/etc/"
           or evt.arg.target startswith "/proc/"

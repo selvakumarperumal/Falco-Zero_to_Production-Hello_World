@@ -12,7 +12,7 @@ data:
       desc: Detects a container sharing host PID or network namespaces.
       source: syscall
       condition: >
-        evt.type = execve and evt.dir = < and
+        evt.type = execve and
         container and
         (evt.arg.flags contains "CLONE_NEWPID" or evt.arg.flags contains "CLONE_NEWNET")
       output: >

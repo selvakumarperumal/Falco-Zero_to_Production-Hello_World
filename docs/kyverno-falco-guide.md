@@ -567,7 +567,7 @@ spec:
     Detects file writes to the container root filesystem, excluding
     known-safe paths like /tmp and /proc.
   condition: >
-    evt.type in (open, openat, openat2) and evt.dir = <
+    evt.type in (open, openat, openat2)
     and container
     and evt.is_open_write = true
     and not fd.name startswith "/tmp"
@@ -765,7 +765,7 @@ spec:
     Detects a container accessing sensitive paths on the host filesystem
     via a hostPath mount.
   condition: >
-    evt.type in (open, openat, openat2) and evt.dir = <
+    evt.type in (open, openat, openat2)
     and container
     and (fd.name startswith "/etc/shadow"
       or fd.name startswith "/etc/kubernetes"
@@ -825,7 +825,7 @@ spec:
     Detects a container process reading the Kubernetes service account
     token file, which could indicate credential harvesting.
   condition: >
-    evt.type in (open, openat, openat2) and evt.dir = <
+    evt.type in (open, openat, openat2)
     and container
     and fd.name contains "/var/run/secrets/kubernetes.io/serviceaccount"
     and not k8s.ns.name in (kube-system, kyverno)
@@ -938,7 +938,7 @@ spec:
     Detects a container process binding to a port outside the expected
     application range (common for backdoors and reverse shells).
   condition: >
-    evt.type in (bind, listen) and evt.dir = <
+    evt.type in (bind, listen)
     and container
     and fd.sport != 0
     and not fd.sport in (80, 443, 8080, 8443, 3000, 5000, 9090)
@@ -1106,7 +1106,7 @@ spec:
     Detects outbound network connections to destinations outside the
     cluster's internal network ranges.
   condition: >
-    evt.type = connect and evt.dir = <
+    evt.type = connect
     and container
     and fd.typechar = 4
     and fd.ip != "0.0.0.0"
@@ -1303,7 +1303,7 @@ spec:
   desc: >
     Detects access to sensitive credential files from inside a container.
   condition: >
-    evt.type in (open, openat, openat2) and evt.dir = <
+    evt.type in (open, openat, openat2)
     and container
     and evt.is_open_read = true
     and (fd.name in (/etc/shadow, /etc/gshadow, /etc/master.passwd)
@@ -1337,7 +1337,7 @@ spec:
     Detects deletion of log files inside a container, which may indicate
     an attacker covering their tracks.
   condition: >
-    evt.type in (unlink, unlinkat, rename, renameat) and evt.dir = <
+    evt.type in (unlink, unlinkat, rename, renameat)
     and container
     and (fd.name startswith "/var/log/"
       or fd.name endswith ".log"
@@ -1368,7 +1368,7 @@ spec:
     Detects creation of symbolic links pointing to sensitive paths,
     which is a common container escape technique (CVE-2021-25741).
   condition: >
-    evt.type in (symlink, symlinkat) and evt.dir = <
+    evt.type in (symlink, symlinkat)
     and container
     and (evt.arg.target startswith "/etc/"
       or evt.arg.target startswith "/proc/"

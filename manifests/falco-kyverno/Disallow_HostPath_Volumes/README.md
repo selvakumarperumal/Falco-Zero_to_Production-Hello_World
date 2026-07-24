@@ -59,7 +59,7 @@ data:
         Detects a container accessing sensitive paths on the host
         filesystem via a hostPath mount.
       condition: >
-        evt.type in (open, openat, openat2) and evt.dir = <
+        evt.type in (open, openat, openat2)
         and container
         and (fd.name startswith "/etc/shadow"
           or fd.name startswith "/etc/kubernetes"
@@ -82,7 +82,7 @@ The Kyverno policy protects the host directory hierarchy:
 
 ### Falco Rule Manifest Explanation
 The companion Falco rule detects host filesystem reads/writes:
-- **`evt.type in (open, openat, openat2) and evt.dir = <`**: Listens for file open syscall completions.
+- **`evt.type in (open, openat, openat2)`**: Listens for file open syscall completions.
 - **`fd.name startswith "/etc/shadow"` or `/etc/kubernetes` or `/var/run/docker.sock`**: Targets system files and sockets. If any container opens files in these paths, it generates a `CRITICAL` alert since host paths should never be exposed to runtime workloads.
 
 ## How to Test

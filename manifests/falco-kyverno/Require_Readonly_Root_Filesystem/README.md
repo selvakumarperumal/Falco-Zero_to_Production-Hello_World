@@ -63,7 +63,7 @@ data:
         Detects file writes to the container root filesystem, excluding
         known-safe paths like /tmp and /proc.
       condition: >
-        evt.type in (open, openat, openat2) and evt.dir = <
+        evt.type in (open, openat, openat2)
         and container
         and evt.is_open_write = true
         and not fd.name startswith "/tmp"

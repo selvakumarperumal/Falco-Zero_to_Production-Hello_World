@@ -275,7 +275,7 @@ A **macro** is a named, reusable snippet of condition logic. It's like a variabl
 
 ### Why do macros exist?
 
-Repeating `evt.type = execve and evt.dir = <` in every rule is:
+Repeating `evt.type = execve` in every rule is:
 - **Tedious** — you type the same thing dozens of times
 - **Error-prone** — one typo and a rule silently breaks
 - **Hard to maintain** — if the pattern needs to change, you update it in one place
@@ -284,7 +284,7 @@ Repeating `evt.type = execve and evt.dir = <` in every rule is:
 
 ```yaml
 - macro: spawned_process
-  condition: evt.type = execve and evt.dir = <
+  condition: evt.type = execve
 ```
 
 - `macro:` — tells Falco "this is a reusable condition snippet, not a rule."
@@ -299,7 +299,7 @@ condition: spawned_process and container and proc.name = "bash"
 ```
 Falco internally expands this to:
 ```yaml
-condition: (evt.type = execve and evt.dir = <) and container and proc.name = "bash"
+condition: (evt.type = execve) and container and proc.name = "bash"
 ```
 
 ### Built-in macros you'll see everywhere
@@ -308,7 +308,7 @@ Falco's default ruleset (`falco_rules.yaml`) is built almost entirely from stack
 
 | Macro name | What it expands to (simplified) | Plain English |
 |---|---|---|
-| `spawned_process` | `evt.type = execve and evt.dir = <` | "A new process was just created" |
+| `spawned_process` | `evt.type = execve` | "A new process was just created" |
 | `container` | `container.id != host` | "This event happened inside a container, not on the bare host" |
 | `shell_procs` | `proc.name in (shell_binaries)` | "The process is a shell (bash, sh, zsh, etc.)" |
 | `sensitive_files` | `fd.name startswith /etc/shadow or ...` | "A sensitive system file is being accessed" |
@@ -433,22 +433,14 @@ You can match several at once:
 evt.type in (open, openat, openat2)
 ```
 
-### `evt.dir` — entry vs. exit
+> [!NOTE]
+> **Deprecation Warning (Falco 0.42.0+):**
+> The `evt.dir` field and the concept of event direction (`<` exit / `>` enter) are **deprecated in Falco 0.42.0+** and removed in recent Falco versions because Falco dropped syscall enter (`>`) events to streamline processing.
+> All rules now process exit events natively. You should omit `evt.dir = <` or `evt.dir = >` from all Falco rule conditions.
 
-Syscalls fire **twice** per call — once on **entry** (before the kernel does the work) and once on **exit** (after it's done).
-
-| Value | Symbol | Meaning | When the data is available |
-|---|---|---|---|
-| `evt.dir = >` | Entry | The syscall was just called | You know *what* was requested, but not whether it succeeded |
-| `evt.dir = <` | Exit | The syscall just finished | You know the result, return value, opened file descriptor, etc. |
-
-**Most rules care about the exit event**, because that's when you know:
-- Did the syscall succeed? (`evt.rawres >= 0`)
-- What file was actually opened? (`fd.name` is populated)
-- What process was actually created? (process metadata is complete)
 
 ```yaml
-condition: evt.type = open and evt.dir = < and evt.rawres >= 0
+condition: evt.type = open and evt.rawres >= 0
 ```
 Translation: "A file was opened (`open`), the syscall completed (exit), and it succeeded (return code ≥ 0)."
 
@@ -498,7 +490,7 @@ Let's build this condition incrementally, explaining each step:
 
 ### Step 1 — narrow to the event type
 ```
-evt.type in (open, openat, openat2) and evt.dir = <
+evt.type in (open, openat, openat2)
 ```
 **What this does:** Only look at file-open events, and only after they complete (exit). We include all three variants of `open` because different Linux versions and applications use different ones.
 
@@ -530,7 +522,6 @@ and not proc.name in (dpkg, rpm, yum, apt, apt-get)
 ```yaml
 condition: >
   evt.type in (open, openat, openat2)
-  and evt.dir = <
   and container.id != host
   and evt.is_open_write = true
   and fd.name startswith "/etc/"

@@ -78,7 +78,7 @@ data:
         limits defined in Kubernetes spec.
       source: syscall
       condition: >
-        evt.type = execve and evt.dir = < and
+        evt.type = execve and
         container and
         not k8s.ns.name in (kube-system, kyverno, falco)
       output: >

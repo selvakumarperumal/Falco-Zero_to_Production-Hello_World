@@ -57,7 +57,7 @@ data:
       desc: Detects a container spawned with host privileged mode enabled.
       source: syscall
       condition: >
-        evt.type = execve and evt.dir = < and
+        evt.type = execve and
         container and container.privileged = true
       output: >
         Privileged container started (user=%user.name pod=%k8s.pod.name

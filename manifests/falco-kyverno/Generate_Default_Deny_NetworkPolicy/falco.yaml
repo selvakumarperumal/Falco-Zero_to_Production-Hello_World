@@ -16,7 +16,7 @@ data:
         Detects outbound network connections to destinations outside
         the cluster internal network ranges.
       condition: >
-        evt.type = connect and evt.dir = <
+        evt.type = connect
         and container
         and fd.typechar = 4
         and fd.ip != "0.0.0.0"

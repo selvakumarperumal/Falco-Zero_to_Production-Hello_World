@@ -59,7 +59,7 @@ data:
         Detects a container process binding to a port outside the expected
         application range (common for backdoors and reverse shells).
       condition: >
-        evt.type in (bind, listen) and evt.dir = <
+        evt.type in (bind, listen)
         and container
         and fd.sport != 0
         and not fd.sport in (80, 443, 8080, 8443, 3000, 5000, 9090)
@@ -79,7 +79,7 @@ The Kyverno configuration protects node-level network exposure:
 
 ### Falco Rule Manifest Explanation
 The runtime rule acts as a fallback for unauthorized reverse shell/backdoor listeners:
-- **`evt.type in (bind, listen) and evt.dir = <`**: Matches socket bind or listen syscall completions.
+- **`evt.type in (bind, listen)`**: Matches socket bind or listen syscall completions.
 - **`fd.sport != 0`**: Ensures a source port is allocated.
 - **`not fd.sport in (80, 443, 8080, 8443, 3000, 5000, 9090)`**: Lists approved port exemptions. If a containerized process attempts to open a server socket on any other port, it triggers a `NOTICE` alert.
 

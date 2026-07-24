@@ -55,7 +55,7 @@ data:
       desc: Detects a process spawned with UID 0 (root) inside an application container.
       source: syscall
       condition: >
-        evt.type = execve and evt.dir = < and
+        evt.type = execve and
         container and user.uid = 0 and
         not k8s.ns.name in (kube-system, kyverno, falco)
       output: >
