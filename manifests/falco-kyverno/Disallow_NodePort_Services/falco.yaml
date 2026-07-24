@@ -7,12 +7,11 @@ metadata:
     app.kubernetes.io/part-of: falco
     app.kubernetes.io/component: custom-rules
 data:
-  # -------------------------------------------------------------------------
-  # Original hello-world rules (preserved from existing ConfigMap)
-  # -------------------------------------------------------------------------
-  hello-world-rules.yaml: |-
+  falco-kyverno-rules.yaml: |-
     - rule: Unexpected Listening Port in Container
       desc: >
+
+      source: syscall
         Detects a container process binding to a port outside the expected
         application range (common for backdoors and reverse shells).
       condition: >

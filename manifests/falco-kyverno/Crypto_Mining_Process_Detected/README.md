@@ -20,10 +20,7 @@ metadata:
     app.kubernetes.io/part-of: falco
     app.kubernetes.io/component: custom-rules
 data:
-  # -------------------------------------------------------------------------
-  # Original hello-world rules (preserved from existing ConfigMap)
-  # -------------------------------------------------------------------------
-  hello-world-rules.yaml: |-
+  falco-kyverno-rules.yaml: |-
     - list: crypto_mining_processes
       items:
         - xmrig
@@ -40,6 +37,8 @@ data:
 
     - rule: Crypto Mining Process Detected
       desc: >
+
+      source: syscall
         Detects known cryptocurrency mining processes or connections to
         known mining pool domains.
       condition: >

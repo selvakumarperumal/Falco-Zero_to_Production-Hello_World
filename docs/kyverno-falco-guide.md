@@ -203,6 +203,7 @@ spec:
 ```yaml
 - rule: Privileged Container Started
   desc: >
+  source: syscall
     Detects a container that was started with privileged mode.
     This should never happen if Kyverno is enforcing, so this alert
     means either Kyverno was bypassed or is in Audit mode.
@@ -260,6 +261,7 @@ spec:
 ```yaml
 - rule: Container Using Host Namespace
   desc: >
+  source: syscall
     Detects a container running with host PID or network namespace.
   condition: >
     container_started and container
@@ -314,6 +316,7 @@ spec:
 ```yaml
 - rule: Container Running as Root User
   desc: >
+  source: syscall
     Detects a process running as root (UID 0) inside a container.
   condition: >
     spawned_process and container
@@ -381,6 +384,7 @@ spec:
 
 - rule: Container from Untrusted Registry
   desc: >
+  source: syscall
     Detects a running container whose image was pulled from a registry
     not in the approved list.
   condition: >
@@ -443,6 +447,7 @@ spec:
 ```yaml
 - rule: Container Running with Latest Tag
   desc: >
+  source: syscall
     Detects a running container using the :latest image tag.
   condition: >
     container_started and container
@@ -503,6 +508,7 @@ spec:
 ```yaml
 - rule: Container Resource Exhaustion Behavior
   desc: >
+  source: syscall
     Detects a container process consuming excessive resources, potentially
     indicating a fork bomb or resource exhaustion attack.
   condition: >
@@ -564,6 +570,7 @@ spec:
 ```yaml
 - rule: Write to Container Root Filesystem
   desc: >
+  source: syscall
     Detects file writes to the container root filesystem, excluding
     known-safe paths like /tmp and /proc.
   condition: >
@@ -630,6 +637,7 @@ spec:
 ```yaml
 - rule: Dangerous Capability Used at Runtime
   desc: >
+  source: syscall
     Detects a process attempting to use dangerous Linux capabilities
     such as SYS_ADMIN, SYS_PTRACE, or NET_RAW.
   condition: >
@@ -694,6 +702,7 @@ spec:
 ```yaml
 - rule: Setuid or Setgid Binary Executed in Container
   desc: >
+  source: syscall
     Detects execution of setuid/setgid binaries inside a container,
     which can be used for privilege escalation.
   condition: >
@@ -762,6 +771,7 @@ spec:
 
 - rule: Sensitive Host Path Accessed from Container
   desc: >
+  source: syscall
     Detects a container accessing sensitive paths on the host filesystem
     via a hostPath mount.
   condition: >
@@ -822,6 +832,7 @@ spec:
 ```yaml
 - rule: Service Account Token Accessed in Container
   desc: >
+  source: syscall
     Detects a container process reading the Kubernetes service account
     token file, which could indicate credential harvesting.
   condition: >
@@ -935,6 +946,7 @@ spec:
 ```yaml
 - rule: Unexpected Listening Port in Container
   desc: >
+  source: syscall
     Detects a container process binding to a port outside the expected
     application range (common for backdoors and reverse shells).
   condition: >
@@ -992,6 +1004,7 @@ spec:
 ```yaml
 - rule: Container Process Crash Loop Detected
   desc: >
+  source: syscall
     Detects repeated process crashes in a container, which may indicate
     an unhealthy application that is bypassing health probe checks.
   condition: >
@@ -1103,6 +1116,7 @@ spec:
 ```yaml
 - rule: Unexpected Outbound Connection from Container
   desc: >
+  source: syscall
     Detects outbound network connections to destinations outside the
     cluster's internal network ranges.
   condition: >
@@ -1232,6 +1246,7 @@ spec:
 ```yaml
 - rule: Interactive Shell Spawned in Container
   desc: >
+  source: syscall
     Detects an interactive shell (bash, sh, zsh) spawned inside a
     container. This is a common post-exploitation indicator.
   condition: >
@@ -1266,6 +1281,7 @@ spec:
 
 - rule: Crypto Mining Process Detected
   desc: >
+  source: syscall
     Detects known cryptocurrency mining processes or connections to
     known mining pool domains.
   condition: >
@@ -1301,6 +1317,7 @@ spec:
 
 - rule: Sensitive File Read in Container
   desc: >
+  source: syscall
     Detects access to sensitive credential files from inside a container.
   condition: >
     evt.type in (open, openat, openat2)
@@ -1334,6 +1351,7 @@ spec:
 ```yaml
 - rule: Log File Deletion in Container
   desc: >
+  source: syscall
     Detects deletion of log files inside a container, which may indicate
     an attacker covering their tracks.
   condition: >
@@ -1365,6 +1383,7 @@ spec:
 ```yaml
 - rule: Symlink Created to Sensitive Path
   desc: >
+  source: syscall
     Detects creation of symbolic links pointing to sensitive paths,
     which is a common container escape technique (CVE-2021-25741).
   condition: >
@@ -1394,6 +1413,7 @@ spec:
 ```yaml
 - rule: Reverse Shell Detected in Container
   desc: >
+  source: syscall
     Detects processes commonly used to establish reverse shells, including
     netcat, bash redirections, and scripting language one-liners.
   condition: >

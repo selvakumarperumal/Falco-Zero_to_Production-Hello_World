@@ -7,12 +7,11 @@ metadata:
     app.kubernetes.io/part-of: falco
     app.kubernetes.io/component: custom-rules
 data:
-  # -------------------------------------------------------------------------
-  # Original hello-world rules (preserved from existing ConfigMap)
-  # -------------------------------------------------------------------------
-  hello-world-rules.yaml: |-
+  falco-kyverno-rules.yaml: |-
     - rule: Container Running with Latest Tag
       desc: >
+
+      source: syscall
         Detects a running container using the :latest image tag.
       condition: >
         container_started and container

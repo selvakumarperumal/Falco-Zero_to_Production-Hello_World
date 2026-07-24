@@ -54,12 +54,11 @@ metadata:
     app.kubernetes.io/part-of: falco
     app.kubernetes.io/component: custom-rules
 data:
-  # -------------------------------------------------------------------------
-  # Original hello-world rules (preserved from existing ConfigMap)
-  # -------------------------------------------------------------------------
-  hello-world-rules.yaml: |-
+  falco-kyverno-rules.yaml: |-
     - rule: Write to Container Root Filesystem
       desc: >
+
+      source: syscall
         Detects file writes to the container root filesystem, excluding
         known-safe paths like /tmp and /proc.
       condition: >

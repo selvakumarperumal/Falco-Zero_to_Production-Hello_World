@@ -56,12 +56,11 @@ metadata:
     app.kubernetes.io/part-of: falco
     app.kubernetes.io/component: custom-rules
 data:
-  # -------------------------------------------------------------------------
-  # Original hello-world rules (preserved from existing ConfigMap)
-  # -------------------------------------------------------------------------
-  hello-world-rules.yaml: |-
+  falco-kyverno-rules.yaml: |-
     - rule: Container from Untrusted Registry
       desc: >
+
+      source: syscall
         Detects a running container whose image was pulled from a registry
         not in the approved list.
       condition: >

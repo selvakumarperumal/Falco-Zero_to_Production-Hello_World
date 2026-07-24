@@ -20,12 +20,11 @@ metadata:
     app.kubernetes.io/part-of: falco
     app.kubernetes.io/component: custom-rules
 data:
-  # -------------------------------------------------------------------------
-  # Original hello-world rules (preserved from existing ConfigMap)
-  # -------------------------------------------------------------------------
-  hello-world-rules.yaml: |-
+  falco-kyverno-rules.yaml: |-
     - rule: Symlink Created to Sensitive Path
       desc: >
+
+      source: syscall
         Detects creation of symbolic links pointing to sensitive paths,
         which is a common container escape technique (CVE-2021-25741).
       condition: >

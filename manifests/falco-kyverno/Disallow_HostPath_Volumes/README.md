@@ -50,12 +50,11 @@ metadata:
     app.kubernetes.io/part-of: falco
     app.kubernetes.io/component: custom-rules
 data:
-  # -------------------------------------------------------------------------
-  # Original hello-world rules (preserved from existing ConfigMap)
-  # -------------------------------------------------------------------------
-  hello-world-rules.yaml: |-
+  falco-kyverno-rules.yaml: |-
     - rule: Sensitive Host Path Accessed from Container
       desc: >
+
+      source: syscall
         Detects a container accessing sensitive paths on the host
         filesystem via a hostPath mount.
       condition: >

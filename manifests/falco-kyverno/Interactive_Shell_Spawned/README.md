@@ -20,12 +20,11 @@ metadata:
     app.kubernetes.io/part-of: falco
     app.kubernetes.io/component: custom-rules
 data:
-  # -------------------------------------------------------------------------
-  # Original hello-world rules (preserved from existing ConfigMap)
-  # -------------------------------------------------------------------------
-  hello-world-rules.yaml: |-
+  falco-kyverno-rules.yaml: |-
     - rule: Interactive Shell Spawned in Container
       desc: >
+
+      source: syscall
         Detects an interactive shell (bash, sh, zsh) spawned inside a
         container. This is a common post-exploitation indicator.
       condition: >

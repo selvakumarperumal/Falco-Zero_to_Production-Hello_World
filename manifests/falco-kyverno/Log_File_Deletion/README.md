@@ -20,12 +20,11 @@ metadata:
     app.kubernetes.io/part-of: falco
     app.kubernetes.io/component: custom-rules
 data:
-  # -------------------------------------------------------------------------
-  # Original hello-world rules (preserved from existing ConfigMap)
-  # -------------------------------------------------------------------------
-  hello-world-rules.yaml: |-
+  falco-kyverno-rules.yaml: |-
     - rule: Log File Deletion in Container
       desc: >
+
+      source: syscall
         Detects deletion of log files inside a container, which may
         indicate an attacker covering their tracks.
       condition: >
