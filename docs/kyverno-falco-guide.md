@@ -837,6 +837,62 @@ spec:
   tags: [kyverno_companion, sa_token, mitre_credential_access]
 ```
 
+#### Test Scenarios & CEL Logic Trace
+
+##### Scenario 1 — Default ServiceAccount (Condition = `true`, Check Evaluated)
+
+* **❌ FAILS — Implicit default SA without token opt-out (`test-default-sa-fail`):**
+  ```yaml
+  apiVersion: v1
+  kind: Pod
+  metadata:
+    name: test-default-sa-fail
+    namespace: default
+  spec:
+    containers:
+      - name: app
+        image: nginx:latest
+  ```
+  * **Trace:** `!has(serviceAccountName)` → `true` → condition true → true-branch: `has(automountServiceAccountToken)` → `false` → overall result: `false` (Violation).
+
+* **✅ PASSES — Implicit default SA with token opt-out (`test-default-sa-pass`):**
+  ```yaml
+  apiVersion: v1
+  kind: Pod
+  metadata:
+    name: test-default-sa-pass
+    namespace: default
+  spec:
+    automountServiceAccountToken: false
+    containers:
+      - name: app
+        image: nginx:latest
+  ```
+  * **Trace:** Condition true (implicit default) → true-branch: `has(automountServiceAccountToken)` → `true`, `automountServiceAccountToken == false` → `true` → overall result: `true` (Compliant).
+
+##### Scenario 2 — Custom ServiceAccount (Condition = `false`, Policy Skips Check)
+
+* **✅ PASSES — Custom SA (`test-custom-sa`):**
+  ```yaml
+  apiVersion: v1
+  kind: ServiceAccount
+  metadata:
+    name: my-app-sa
+    namespace: default
+  ---
+  apiVersion: v1
+  kind: Pod
+  metadata:
+    name: test-custom-sa
+    namespace: default
+  spec:
+    serviceAccountName: my-app-sa
+    containers:
+      - name: app
+        image: nginx:latest
+  ```
+  * **Trace:** `!has(serviceAccountName)` → `false`; `serviceAccountName == 'default'` → `false`. Condition `false || false` → `false` → ternary takes `: true` branch immediately → overall result: `true` (Always passes, regardless of `automountServiceAccountToken`).
+
 ---
 
 ### Example 12 — Disallow NodePort Services

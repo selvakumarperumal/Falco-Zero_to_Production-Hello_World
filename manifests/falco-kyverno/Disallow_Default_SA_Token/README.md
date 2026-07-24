@@ -69,35 +69,136 @@ data:
 
 ## Detailed Explanation
 ### Kyverno Policy Manifest Explanation
-The Kyverno check enforces a zero-trust credential mount policy:
-- **`validationActions`**: Set to `Deny` to block non-compliant requests at admission time.
-- **`preconditions`**: Checks if the pod's service account name is `default` (or blank, which defaults to `default`).
-- **`validate.pattern`**: Enforces that `automountServiceAccountToken` must be explicitly set to `false`.
+The Kyverno check enforces a zero-trust credential mount policy using CEL ternary logic:
+```cel
+(!has(object.spec.serviceAccountName) || object.spec.serviceAccountName == 'default') ?
+(has(object.spec.automountServiceAccountToken) && object.spec.automountServiceAccountToken == false) : true
+```
 
-### Falco Rule Manifest Explanation
-The companion Falco rule monitors the token file access:
-- **`evt.type in (open, openat, openat2)`**: Listens to system calls used to open/read files.
-- **`evt.dir = <`**: Matches only when the syscall exits (successfully returns a file descriptor).
-- **`fd.name contains "/var/run/secrets/kubernetes.io/serviceaccount"`**: Focuses on access to the mounted service account credentials.
-- **`not k8s.ns.name in (kube-system, kyverno)`**: Excludes safe system namespaces.
-- **`not proc.name in (pause, tini)`**: Excludes typical orchestrator helper processes.
+---
+
+## Test Scenarios & CEL Logic Trace
+
+### Scenario 1 — Default ServiceAccount (Condition = `true`, Check Evaluated)
+
+#### ❌ FAILS — Implicit default SA without token opt-out (`test-default-sa-fail.yaml`)
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-default-sa-fail
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:latest
+```
+- **Trace:** `!has(serviceAccountName)` → `true` → condition evaluates to `true` → true-branch: `has(automountServiceAccountToken)` → `false` → overall result: `false` (Violation).
+
+#### ✅ PASSES — Implicit default SA with token opt-out (`test-default-sa-pass.yaml`)
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-default-sa-pass
+  namespace: default
+spec:
+  automountServiceAccountToken: false
+  containers:
+    - name: app
+      image: nginx:latest
+```
+- **Trace:** Condition evaluates to `true` (implicit default) → true-branch: `has(automountServiceAccountToken)` → `true`, `automountServiceAccountToken == false` → `true` → overall result: `true` (Compliant).
+
+---
+
+### Scenario 2 — Custom ServiceAccount (Condition = `false`, Policy Skips Check)
+
+#### ✅ PASSES — Custom SA (`test-custom-sa.yaml`)
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: my-app-sa
+  namespace: default
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-custom-sa
+  namespace: default
+spec:
+  serviceAccountName: my-app-sa
+  containers:
+    - name: app
+      image: nginx:latest
+```
+- **Trace:** `!has(serviceAccountName)` → `false`; `serviceAccountName == 'default'` → `false`. Condition `false || false` → `false` → ternary takes the `: true` fallback branch immediately → overall result: `true` (Always passes, regardless of `automountServiceAccountToken`).
+
+---
 
 ## How to Test
+
 ### Kyverno (Admission Check)
-Try to deploy a pod with the default service account without setting `automountServiceAccountToken: false`:
+
+#### 1. Testing in Audit Mode
+When `validationActions: [Audit]`, all three manifests can be applied:
+
 ```bash
 kubectl apply -f - <<EOF
 apiVersion: v1
 kind: Pod
 metadata:
-  name: test-default-sa
+  name: test-default-sa-fail
+  namespace: default
 spec:
   containers:
-  - name: nginx
-    image: nginx
+    - name: app
+      image: nginx:latest
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-default-sa-pass
+  namespace: default
+spec:
+  automountServiceAccountToken: false
+  containers:
+    - name: app
+      image: nginx:latest
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: my-app-sa
+  namespace: default
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-custom-sa
+  namespace: default
+spec:
+  serviceAccountName: my-app-sa
+  containers:
+    - name: app
+      image: nginx:latest
 EOF
 ```
-Kyverno will validate this request (depending on the mode, it will either block the pod or report a violation in the Audit PolicyReport).
+
+Check the generated PolicyReport:
+```bash
+kubectl get policyreport -n default
+kubectl describe policyreport -n default
+```
+*Result:* `test-default-sa-fail` is reported as `fail`, while `test-default-sa-pass` and `test-custom-sa` are reported as `pass`.
+
+#### 2. Testing in Enforce Mode
+When `validationActions: [Deny]`, applying `test-default-sa-fail` will be rejected immediately at `kubectl apply` time:
+```text
+Error from server (Forbidden): admission webhook "vpol.validate.kyverno.svc-fail" denied the request:
+Policy disallow-default-sa-token failed: Pods using the default service account must set automountServiceAccountToken to false.
+```
 
 ### Falco (Runtime Check)
 1. Run a container and read the mounted service account token file:
@@ -107,5 +208,7 @@ kubectl run test-sa-read --image=alpine --restart=Never -it -- cat /var/run/secr
 2. Verify that Falco has raised a warning alert: `Service Account Token Accessed in Container`.
 3. Clean up:
 ```bash
-kubectl delete pod test-sa-read
+kubectl delete pod test-sa-read test-default-sa-fail test-default-sa-pass test-custom-sa --ignore-not-found
+kubectl delete sa my-app-sa -n default --ignore-not-found
 ```
+
