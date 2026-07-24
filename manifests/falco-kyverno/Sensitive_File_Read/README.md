@@ -23,10 +23,9 @@ data:
   falco-kyverno-rules.yaml: |-
     - rule: Sensitive File Read in Container
       desc: >
-
-      source: syscall
         Detects access to sensitive credential files from inside a
         container.
+      source: syscall
       condition: >
         evt.type in (open, openat, openat2)
         and container

@@ -23,10 +23,9 @@ data:
   falco-kyverno-rules.yaml: |-
     - rule: Log File Deletion in Container
       desc: >
-
-      source: syscall
         Detects deletion of log files inside a container, which may
         indicate an attacker covering their tracks.
+      source: syscall
       condition: >
         evt.type in (unlink, unlinkat, rename, renameat)
         and container

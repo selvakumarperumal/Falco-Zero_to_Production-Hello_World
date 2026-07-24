@@ -53,12 +53,11 @@ data:
   falco-kyverno-rules.yaml: |-
     - rule: Container Process Crash Loop Detected
       desc: >
-
-      source: syscall
         Detects repeated process crashes in a container, which may
         indicate an unhealthy application bypassing health probe checks.
+      source: syscall
       condition: >
-        spawned_process and container
+        evt.type in (execve, execveat) and evt.failed = false and container
         and proc.name in (sh, bash)
         and proc.cmdline contains "exit"
         and proc.duration <= 5000000000

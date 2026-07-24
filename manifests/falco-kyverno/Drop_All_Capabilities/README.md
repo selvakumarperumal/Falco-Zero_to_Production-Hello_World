@@ -58,12 +58,11 @@ data:
   falco-kyverno-rules.yaml: |-
     - rule: Dangerous Capability Used at Runtime
       desc: >
-
-      source: syscall
         Detects a process attempting to use dangerous Linux capabilities
         such as SYS_ADMIN, SYS_PTRACE, or NET_RAW.
+      source: syscall
       condition: >
-        spawned_process and container
+        evt.type in (execve, execveat) and evt.failed = false and container
         and (proc.name = "nsenter" or proc.name = "unshare"
           or proc.cmdline contains "capsh"
           or proc.cmdline contains "--cap-add")

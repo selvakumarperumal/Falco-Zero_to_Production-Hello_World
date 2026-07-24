@@ -10,10 +10,9 @@ data:
   falco-kyverno-rules.yaml: |-
     - rule: Write to Container Root Filesystem
       desc: >
-
-      source: syscall
         Detects file writes to the container root filesystem, excluding
         known-safe paths like /tmp and /proc.
+      source: syscall
       condition: >
         evt.type in (open, openat, openat2)
         and container

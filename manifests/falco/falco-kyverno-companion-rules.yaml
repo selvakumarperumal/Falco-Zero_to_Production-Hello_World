@@ -47,6 +47,25 @@ data:
   # -------------------------------------------------------------------------
   kyverno-companion-rules.yaml: |-
     # =======================================================================
+    # 0. Standard Macros (Falco v0.44+ — defined locally for standalone use)
+    #    These mirror the default Falco ruleset macros. If you load
+    #    falco_rules.yaml alongside this file, duplicates are harmless.
+    #    Ref: https://falco.org/docs/reference/rules/default-macros/
+    # =======================================================================
+
+    - macro: spawned_process
+      condition: (evt.type in (execve, execveat) and evt.failed = false)
+
+    - macro: container
+      condition: (container.id != host)
+
+    - macro: container_started
+      condition: (spawned_process and container and proc.vpid = 1)
+
+    - macro: never_true
+      condition: (evt.num = 0)
+
+    # =======================================================================
     # 1. Custom Lists — Appended to Default Falco Ruleset
     # =======================================================================
 

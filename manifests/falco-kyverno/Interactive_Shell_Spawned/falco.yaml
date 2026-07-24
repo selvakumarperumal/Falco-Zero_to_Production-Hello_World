@@ -10,12 +10,11 @@ data:
   falco-kyverno-rules.yaml: |-
     - rule: Interactive Shell Spawned in Container
       desc: >
-
-      source: syscall
         Detects an interactive shell (bash, sh, zsh) spawned inside a
         container. This is a common post-exploitation indicator.
+      source: syscall
       condition: >
-        spawned_process and container
+        evt.type in (execve, execveat) and evt.failed = false and container
         and proc.name in (bash, sh, zsh, ksh, csh, fish, dash)
         and proc.tty != 0
         and not k8s.ns.name in (kube-system, kyverno)

@@ -24,12 +24,11 @@ data:
 
     - rule: Crypto Mining Process Detected
       desc: >
-
-      source: syscall
         Detects known cryptocurrency mining processes or connections to
         known mining pool domains.
+      source: syscall
       condition: >
-        spawned_process and container
+        evt.type in (execve, execveat) and evt.failed = false and container
         and (proc.name in (crypto_mining_processes)
           or proc.cmdline contains "stratum+tcp://"
           or proc.cmdline contains "stratum+ssl://"

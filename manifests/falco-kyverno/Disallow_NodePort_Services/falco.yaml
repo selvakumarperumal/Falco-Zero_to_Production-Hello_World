@@ -10,10 +10,9 @@ data:
   falco-kyverno-rules.yaml: |-
     - rule: Unexpected Listening Port in Container
       desc: >
-
-      source: syscall
         Detects a container process binding to a port outside the expected
         application range (common for backdoors and reverse shells).
+      source: syscall
       condition: >
         evt.type in (bind, listen)
         and container

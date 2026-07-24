@@ -58,12 +58,11 @@ data:
   falco-kyverno-rules.yaml: |-
     - rule: Container Resource Exhaustion Behavior
       desc: >
-
-      source: syscall
         Detects a container process consuming excessive resources,
         potentially indicating a fork bomb or resource exhaustion attack.
+      source: syscall
       condition: >
-        spawned_process and container
+        evt.type in (execve, execveat) and evt.failed = false and container
         and proc.name in (stress, stress-ng, yes, dd)
         and not k8s.ns.name in (kube-system)
       output: >

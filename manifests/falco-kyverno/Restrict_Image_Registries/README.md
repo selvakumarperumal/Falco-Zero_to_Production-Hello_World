@@ -59,12 +59,11 @@ data:
   falco-kyverno-rules.yaml: |-
     - rule: Container from Untrusted Registry
       desc: >
-
-      source: syscall
         Detects a running container whose image was pulled from a registry
         not in the approved list.
+      source: syscall
       condition: >
-        container_started and container
+        evt.type in (execve, execveat) and evt.failed = false and container and proc.vpid = 1 and container
         and not container.image.repository contains "dkr.ecr"
         and not container.image.repository contains "ghcr.io"
         and not container.image.repository contains "gcr.io"

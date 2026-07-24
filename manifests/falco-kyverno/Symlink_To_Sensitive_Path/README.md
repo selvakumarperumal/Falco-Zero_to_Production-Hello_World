@@ -23,10 +23,9 @@ data:
   falco-kyverno-rules.yaml: |-
     - rule: Symlink Created to Sensitive Path
       desc: >
-
-      source: syscall
         Detects creation of symbolic links pointing to sensitive paths,
         which is a common container escape technique (CVE-2021-25741).
+      source: syscall
       condition: >
         evt.type in (symlink, symlinkat)
         and container

@@ -10,13 +10,12 @@ data:
   falco-kyverno-rules.yaml: |-
     - rule: Reverse Shell Detected in Container
       desc: >
-
-      source: syscall
         Detects processes commonly used to establish reverse shells,
         including netcat, bash redirections, and scripting language
         one-liners.
+      source: syscall
       condition: >
-        spawned_process and container
+        evt.type in (execve, execveat) and evt.failed = false and container
         and (proc.name in (nc, ncat, netcat, nmap, socat)
           or (proc.name = "bash" and proc.cmdline contains "/dev/tcp/")
           or (proc.name = "python" and proc.cmdline contains "socket")

@@ -10,12 +10,11 @@ data:
   falco-kyverno-rules.yaml: |-
     - rule: Setuid or Setgid Binary Executed in Container
       desc: >
-
-      source: syscall
         Detects execution of setuid/setgid binaries inside a container,
         which can be used for privilege escalation.
+      source: syscall
       condition: >
-        spawned_process and container
+        evt.type in (execve, execveat) and evt.failed = false and container
         and (proc.name in (sudo, su, newgrp, chsh, chfn, passwd)
           or proc.name = "pkexec")
         and not k8s.ns.name in (kube-system)

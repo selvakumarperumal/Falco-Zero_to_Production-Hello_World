@@ -68,10 +68,9 @@ data:
   falco-kyverno-rules.yaml: |-
     - rule: Unexpected Outbound Connection from Container
       desc: >
-
-      source: syscall
         Detects outbound network connections to destinations outside
         the cluster internal network ranges.
+      source: syscall
       condition: >
         evt.type = connect
         and container

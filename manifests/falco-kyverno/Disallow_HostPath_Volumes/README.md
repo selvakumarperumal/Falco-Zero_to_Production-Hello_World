@@ -53,10 +53,9 @@ data:
   falco-kyverno-rules.yaml: |-
     - rule: Sensitive Host Path Accessed from Container
       desc: >
-
-      source: syscall
         Detects a container accessing sensitive paths on the host
         filesystem via a hostPath mount.
+      source: syscall
       condition: >
         evt.type in (open, openat, openat2)
         and container
