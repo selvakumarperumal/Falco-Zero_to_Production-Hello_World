@@ -78,7 +78,7 @@ When `synchronize.enabled: true`:
 ---
 
 ## Prerequisites
-Create the source secret in the `default` namespace before applying this policy:
+1. Create the source secret in the `default` namespace before applying this policy:
 ```bash
 kubectl create secret docker-registry regcred \
   --docker-server=<your-registry> \
@@ -86,6 +86,21 @@ kubectl create secret docker-registry regcred \
   --docker-password=<password> \
   -n default
 ```
+
+2. Grant secret permissions to the Kyverno background controller via RBAC aggregation (`rbac.kyverno.io/aggregate-to-background-controller: "true"`):
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kyverno:generate-secrets
+  labels:
+    rbac.kyverno.io/aggregate-to-background-controller: "true"
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+```
+
 
 ## How to Test
 
