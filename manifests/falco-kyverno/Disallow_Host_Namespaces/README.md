@@ -4,12 +4,73 @@
 |---|---|
 | **Type** | Kyverno (ValidatingPolicy) + Falco (Detection) |
 | **Kyverno Prevention** | Enforces `hostPID: false`, `hostIPC: false`, and `hostNetwork: false` on pod specifications. |
-| **Falco Detection** | Detects container start events containing flags `CLONE_NEWPID` or `CLONE_NEWNET`. |
+| **Falco Detection** | Detects container executions or start events containing flags `CLONE_NEWPID` or `CLONE_NEWNET`. |
 
 ## Description
-Blocks pods sharing host PID, IPC, or Network namespaces (which breaks node isolation). Detects namespace clone flags during container startup at runtime.
+Blocks pods sharing host PID, IPC, or Network namespaces (which breaks container node isolation). Detects namespace clone flags at runtime.
+
+---
+
+## What is a "Host Namespace"?
+
+Linux namespaces are the core kernel feature that makes container isolation possible. When Docker or containerd starts a container, the Linux kernel assigns it private views of system resources so the container operates as if it is the only instance on the host machine.
+
+### Key Linux Namespace Types
+
+| Namespace | What it Isolates |
+|---|---|
+| **PID** | Process IDs — container sees only its own processes (where PID 1 is its own init process). |
+| **Network** | Network interfaces, IP addresses, routing tables, and port bindings. |
+| **IPC** | Inter-process communication — shared memory segments, semaphores, and message queues. |
+| **Mount** | Filesystem mount points. |
+| **UTS** | Hostname and NIS domain name. |
+
+Under standard container runtime settings, a container receives an isolated copy of each namespace.
+
+---
+
+## Why Sharing Host Namespaces is Dangerous
+
+Setting `hostPID: true`, `hostIPC: true`, or `hostNetwork: true` in a Kubernetes Pod spec instructs the runtime **not** to isolate the container for that subsystem, sharing the host node's own namespace directly instead.
+
+* **`hostPID: true`**:
+  - The container can see every process running on the host node (including `kubelet`, `containerd`, system daemons, and processes of all other pods).
+  - Combined with elevated privileges, an attacker can attach to (`ptrace`) or kill processes running on the host node.
+* **`hostNetwork: true`**:
+  - The pod bypasses virtual network interfaces and uses the host node's network stack directly.
+  - It can bind to host ports, sniff network traffic, and bypass network policies.
+* **`hostIPC: true`**:
+  - The container can read/write shared memory segments used by host processes and other pods sharing host IPC.
+
+> [!WARNING]
+> These flags act as opt-out switches for container isolation. A pod running with all three flags disabled for isolation is effectively running directly on the host node, making it a critical container breakout and privilege escalation vector (**MITRE ATT&CK: Privilege Escalation**). This is why restricting host namespaces is a fundamental requirement of the Kubernetes Pod Security Standards (Baseline & Restricted profiles).
+
+---
+
+## Two-Layer Defense-in-Depth (Kyverno + Falco)
+
+### 1. Kyverno (Admission Time Prevention)
+Kyverno intercepts `Pod` `CREATE` and `UPDATE` API requests using a CEL validation rule:
+
+```cel
+!(has(object.spec.hostPID) && object.spec.hostPID == true) &&
+!(has(object.spec.hostIPC) && object.spec.hostIPC == true) &&
+!(has(object.spec.hostNetwork) && object.spec.hostNetwork == true)
+```
+
+If any of these fields are set to `true`, Kyverno blocks pod creation at admission before the pod is ever scheduled onto a node.
+
+### 2. Falco (Runtime Detection)
+If admission controls are bypassed (e.g. audit mode, emergency override, or direct node access), Falco acts as the safety net by inspecting syscalls for `CLONE_NEWPID` or `CLONE_NEWNET` flags during container executions:
+
+> [!NOTE]
+> **Trigger Point Nuance:**
+> The Falco rule condition uses `evt.type = execve` which evaluates on process execution inside the container. This catches processes exec'd with host namespace clone flags after start, whereas `container_started` triggers strictly once upon container creation.
+
+---
 
 ## Kyverno Policy Manifest
+
 ```yaml
 apiVersion: policies.kyverno.io/v1
 kind: ValidatingPolicy
@@ -40,7 +101,10 @@ spec:
         !(has(object.spec.hostNetwork) && object.spec.hostNetwork == true)
 ```
 
+---
+
 ## Falco Rule Manifest
+
 ```yaml
 apiVersion: v1
 kind: ConfigMap
@@ -66,20 +130,27 @@ data:
       tags: [kyverno_companion, host_namespace, mitre_privilege_escalation]
 ```
 
+---
+
 ## Detailed Explanation
+
 ### Kyverno Policy Manifest Explanation
-This policy prevents container breakout to the host namespaces:
+This policy prevents container breakout to host namespaces:
 - **`validationActions`**: Set to `Deny` to block non-compliant requests at admission time.
-- **`=(hostPID): "false"`**, **`=(hostIPC): "false"`**, **`=(hostNetwork): "false"`**: Validates that if these properties exist in the pod spec, they must be set to `false`.
+- **CEL Expression**: Checks `hostPID`, `hostIPC`, and `hostNetwork` fields on `object.spec`. If any are `true`, validation returns `false` and blocks creation.
 
 ### Falco Rule Manifest Explanation
 The Falco check catches namespace sharing at runtime:
-- **`container_started and container`**: Triggers when a container is initialized.
-- **`evt.arg.flags contains "CLONE_NEWPID"` or `CLONE_NEWNET`**: Inspects clone flags. If a container is started with the host namespace flag set, it means the container is sharing the host namespace, triggering a `CRITICAL` alert.
+- **`evt.type = execve and container`**: Triggers on process executions within a container context.
+- **`evt.arg.flags contains "CLONE_NEWPID"` or `"CLONE_NEWNET"`**: Inspects process clone flags to identify host namespace sharing, firing a `CRITICAL` alert.
+
+---
 
 ## How to Test
+
 ### Kyverno (Admission Check)
-Attempt to deploy a pod with host namespace access enabled (should be blocked):
+Attempt to deploy a pod with host namespace access enabled (should be blocked in `Deny` mode or reported in `Audit` mode):
+
 ```bash
 kubectl apply -f - <<EOF
 apiVersion: v1
