@@ -3,13 +3,54 @@
 | Property | Value |
 |---|---|
 | **Type** | Kyverno (ValidatingPolicy) + Falco (Detection) |
-| **Kyverno Prevention** | Validates that container images do not end in `:latest` and explicitly contain a colon. |
-| **Falco Detection** | Detects container start events where the image repository tag is `latest` or blank. |
+| **Kyverno Prevention** | Validates that container and init container images do not end with the `:latest` tag. |
+| **Falco Detection** | Detects container start events (`container_started`) where the image repository tag is `latest` or omitted. |
 
 ## Description
-Ensures all container deployments use specific version tags instead of the mutable `:latest` tag to ensure reproducibility and tracking. Detects containers starting with `:latest` tag at runtime.
+Ensures all container deployments use explicit, versioned image tags instead of the mutable `:latest` tag to guarantee deployment reproducibility, auditing, and supply chain security. Automatically flags or blocks `:latest` images at admission time and generates runtime alerts upon container initialization.
+
+---
+
+## Why the `:latest` Tag is Dangerous in Production
+
+Using default or mutable tags like `:latest` introduces significant security and operational risks:
+
+* **Non-Reproducible Deployments**: A pod redeployed tomorrow may pull a different underlying image digest than the one deployed today, causing unexpected failures or silent drifting.
+* **Supply Chain Vulnerabilities**: If an upstream container registry tag is overwritten (or compromised via a malicious image push), nodes pulling `:latest` will execute unvetted code.
+* **Caching and Rollback Failures**: Kubernetes `imagePullPolicy` defaults to `Always` when using `:latest`, causing extra network overhead. Conversely, if cached, nodes may run inconsistent versions across a cluster.
+* **Lack of Auditability**: Incident responders cannot easily map a running container to a specific commit or release artifact.
+
+> [!WARNING]
+> Disallowing the `:latest` tag is a foundational requirement under **Supply Chain Security Best Practices** and **Pod Security Standards**.
+
+---
+
+## Two-Layer Defense-in-Depth (Kyverno + Falco)
+
+### 1. Kyverno (Admission Time Prevention)
+Kyverno evaluates `Pod` `CREATE` and `UPDATE` requests using a CEL expression:
+
+```cel
+object.spec.containers.all(c, !c.image.endsWith(':latest')) &&
+object.spec.?initContainers.orValue([]).all(c, !c.image.endsWith(':latest'))
+```
+
+* **Containers & Init Containers**: Verifies that every container in `containers` and optional `initContainers` does not have an image reference ending with `:latest`.
+
+### 2. Falco (Runtime Detection)
+If admission policies are running in `Audit` mode or bypassed, Falco monitors container initialization events at runtime:
+
+```falco
+container_started and (container.image.tag = "latest" or container.image.tag = "")
+```
+
+* **`container_started` Macro**: Fires upon container creation.
+* **Tag Inspection**: Checks if `container.image.tag` is explicitly `"latest"` or blank (which defaults to `latest` in container runtimes), raising a `NOTICE` priority alert.
+
+---
 
 ## Kyverno Policy Manifest
+
 ```yaml
 apiVersion: policies.kyverno.io/v1
 kind: ValidatingPolicy
@@ -40,7 +81,10 @@ spec:
         object.spec.?initContainers.orValue([]).all(c, !c.image.endsWith(':latest'))
 ```
 
+---
+
 ## Falco Rule Manifest
+
 ```yaml
 apiVersion: v1
 kind: ConfigMap
@@ -57,8 +101,8 @@ data:
         Detects a running container using the :latest image tag.
       source: syscall
       condition: >
-        evt.type in (execve, execveat) and evt.failed = false and container and proc.vpid = 1 and container
-        and (container.image.tag = "latest" or container.image.tag = "")
+        container_started and
+        (container.image.tag = "latest" or container.image.tag = "")
       output: >
         Container running with :latest tag
         (image=%container.image.repository:%container.image.tag
@@ -67,23 +111,37 @@ data:
       tags: [kyverno_companion, latest_tag, supply_chain]
 ```
 
+---
+
 ## Detailed Explanation
+
 ### Kyverno Policy Manifest Explanation
-The Kyverno validation enforces image tag discipline:
-- **`image: "!*:latest & *:*"`**:
-  - `*:*` requires the image string to contain a colon (meaning a tag or hash is present).
-  - `!*:latest` rejects the image if the tag is explicitly `latest`.
+The Kyverno validation enforces image tag discipline at admission time:
+- **`validationActions: [Deny]`**: Blocks non-compliant pod creation.
+- **CEL Expression**: `containers.all(c, !c.image.endsWith(':latest'))` iterates over all main container specifications, ensuring no image URI ends in `:latest`. Safe handling via `?initContainers.orValue([])` checks init containers if present.
 
 ### Falco Rule Manifest Explanation
-The Falco check detects running configurations that slipped past admission:
-- **`container.image.tag = "latest" or container.image.tag = ""`**: Checks the container metadata. If the active running tag is `latest` or undefined, it fires a `NOTICE` level alert to inform administrators of floating versions in production.
+The companion Falco rule detects `:latest` images at container startup:
+- **`container_started`**: Triggers once when a container is initialized by the container runtime.
+- **`container.image.tag = "latest" or container.image.tag = ""`**: Checks if the resolved image tag is explicitly `"latest"` or missing (empty string).
+- **Priority**: `NOTICE` — logs a notification for security and platform engineering teams to track floating tags in running workloads.
+
+---
 
 ## How to Test
+
 ### Kyverno (Admission Check)
-Attempt to deploy a pod using the latest tag (should be blocked):
+Attempt to deploy a pod using the `:latest` tag (it should be denied by Kyverno):
+
 ```bash
 kubectl run test-latest --image=nginx:latest --restart=Never
 ```
 
+*Expected Output:*
+```text
+Error from server (Forbidden): admission webhook "vpol.validate.kyverno.svc-fail" denied the request:
+Policy disallow-latest-tag failed: An image tag is required and must not be ':latest'.
+```
+
 ### Falco (Runtime Check)
-Start a container running `:latest` (e.g. during an audit rollout) and inspect Falco alerts for: `Container Running with Latest Tag`.
+If admission control is in `Audit` mode or bypassed, starting a container with `:latest` will trigger a Falco notice alert: `Container Running with Latest Tag`.
