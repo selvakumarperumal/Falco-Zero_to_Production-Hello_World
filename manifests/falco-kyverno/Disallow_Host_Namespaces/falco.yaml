@@ -8,15 +8,14 @@ metadata:
     app.kubernetes.io/component: custom-rules
 data:
   falco-kyverno-rules.yaml: |-
-    - rule: Container Using Host Namespace
-      desc: Detects a container sharing host PID or network namespaces.
-      source: syscall
+    - rule: Container Running with Host PID or Network
+      desc: Detects a running container whose pod uses host PID or network namespace.
       condition: >
-        evt.type = execve and
-        container and
-        (evt.arg.flags contains "CLONE_NEWPID" or evt.arg.flags contains "CLONE_NEWNET")
+        spawned_process and container and
+        (k8s.pod.host_pid=true or k8s.pod.host_network=true)
       output: >
-        Container using host namespace (user=%user.name pod=%k8s.pod.name
-        ns=%k8s.ns.name image=%container.image.repository)
+        Container running with host namespace (user=%user.name pod=%k8s.pod.name
+        ns=%k8s.ns.name image=%container.image.repository
+        hostpid=%k8s.pod.host_pid hostnetwork=%k8s.pod.host_network)
       priority: CRITICAL
       tags: [kyverno_companion, host_namespace, mitre_privilege_escalation]

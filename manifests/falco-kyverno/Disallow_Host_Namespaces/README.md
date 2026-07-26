@@ -4,7 +4,7 @@
 |---|---|
 | **Type** | Kyverno (ValidatingPolicy) + Falco (Detection) |
 | **Kyverno Prevention** | Enforces `hostPID: false`, `hostIPC: false`, and `hostNetwork: false` on pod specifications. |
-| **Falco Detection** | Detects container executions or start events containing flags `CLONE_NEWPID` or `CLONE_NEWNET`. |
+| **Falco Detection** | Detects process spawns inside containers whose pod has `k8s.pod.host_pid=true` or `k8s.pod.host_network=true`. |
 
 ## Description
 Blocks pods sharing host PID, IPC, or Network namespaces (which breaks container node isolation). Detects namespace clone flags at runtime.
@@ -61,11 +61,7 @@ Kyverno intercepts `Pod` `CREATE` and `UPDATE` API requests using a CEL validati
 If any of these fields are set to `true`, Kyverno blocks pod creation at admission before the pod is ever scheduled onto a node.
 
 ### 2. Falco (Runtime Detection)
-If admission controls are bypassed (e.g. audit mode, emergency override, or direct node access), Falco acts as the safety net by inspecting syscalls for `CLONE_NEWPID` or `CLONE_NEWNET` flags during container executions:
-
-> [!NOTE]
-> **Trigger Point Nuance:**
-> The Falco rule condition uses `evt.type = execve` which evaluates on process execution inside the container. This catches processes exec'd with host namespace clone flags after start, whereas `container_started` triggers strictly once upon container creation.
+If admission controls are bypassed (e.g. audit mode, emergency override, or direct node access), Falco acts as the safety net by inspecting spawned processes inside containers and checking Kubernetes pod metadata for host namespace configurations (`k8s.pod.host_pid=true` or `k8s.pod.host_network=true`).
 
 ---
 
@@ -116,16 +112,15 @@ metadata:
     app.kubernetes.io/component: custom-rules
 data:
   falco-kyverno-rules.yaml: |-
-    - rule: Container Using Host Namespace
-      desc: Detects a container sharing host PID or network namespaces.
-      source: syscall
+    - rule: Container Running with Host PID or Network
+      desc: Detects a running container whose pod uses host PID or network namespace.
       condition: >
-        evt.type = execve and
-        container and
-        (evt.arg.flags contains "CLONE_NEWPID" or evt.arg.flags contains "CLONE_NEWNET")
+        spawned_process and container and
+        (k8s.pod.host_pid=true or k8s.pod.host_network=true)
       output: >
-        Container using host namespace (user=%user.name pod=%k8s.pod.name
-        ns=%k8s.ns.name image=%container.image.repository)
+        Container running with host namespace (user=%user.name pod=%k8s.pod.name
+        ns=%k8s.ns.name image=%container.image.repository
+        hostpid=%k8s.pod.host_pid hostnetwork=%k8s.pod.host_network)
       priority: CRITICAL
       tags: [kyverno_companion, host_namespace, mitre_privilege_escalation]
 ```
@@ -141,8 +136,8 @@ This policy prevents container breakout to host namespaces:
 
 ### Falco Rule Manifest Explanation
 The Falco check catches namespace sharing at runtime:
-- **`evt.type = execve and container`**: Triggers on process executions within a container context.
-- **`evt.arg.flags contains "CLONE_NEWPID"` or `"CLONE_NEWNET"`**: Inspects process clone flags to identify host namespace sharing, firing a `CRITICAL` alert.
+- **`spawned_process and container`**: Triggers whenever a new process is spawned within a container context.
+- **`k8s.pod.host_pid=true or k8s.pod.host_network=true`**: Uses Kubernetes metadata enrichment to check if the pod shares host PID or Network namespaces, firing a `CRITICAL` alert containing `hostpid` and `hostnetwork` metadata values.
 
 ---
 
@@ -166,4 +161,4 @@ EOF
 ```
 
 ### Falco (Runtime Check)
-If admission control is bypassed or in audit-only mode, starting a container with host namespaces will fire the alert: `Container Using Host Namespace`.
+If admission control is bypassed or in audit-only mode, starting a container with host namespaces will fire the alert: `Container Running with Host PID or Network`.
