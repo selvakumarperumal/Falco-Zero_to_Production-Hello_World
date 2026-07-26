@@ -3,13 +3,56 @@
 | Property | Value |
 |---|---|
 | **Type** | Kyverno (ValidatingPolicy) + Falco (Detection) |
-| **Kyverno Prevention** | Rejects any pod creation spec containing a `hostPath` volume definition. |
-| **Falco Detection** | Detects reads/writes to sensitive paths on host filesystems. |
+| **Kyverno Prevention** | Rejects pods and workload controllers (`Deployments`, `DaemonSets`, `StatefulSets`, `Jobs`, `CronJobs`) specifying `hostPath` volumes. |
+| **Falco Detection** | Detects open/read access to sensitive host paths (`/etc/shadow`, `/etc/kubernetes`, `/var/run/docker.sock`, `/root/.ssh`, `/root/.kube`) from containers. |
 
 ## Description
-Blocks configuration of `hostPath` volumes which allow pods direct access to the node's filesystem. Monitors and alerts on access to sensitive paths (like `/etc/shadow`, `/var/run/docker.sock`) at runtime.
+Blocks the configuration of `hostPath` volumes in Kubernetes pods and workload controllers. HostPath volumes grant containers direct access to the underlying host node filesystem, bypassing container sandbox boundaries. Automatically generates controller rules via Kyverno `autogen` and monitors runtime access to critical host files using Falco.
+
+---
+
+## What is a HostPath Volume & Why is it Dangerous?
+
+A `hostPath` volume mounts a file or directory from the host node's filesystem directly into a container. While useful for specific node daemon utilities (e.g. log collectors or monitoring agents), allowing arbitrary pods to mount `hostPath` volumes presents severe security risks:
+
+* **Container Escape & Host Compromise**: A container mounting `/` or sensitive host directories can edit host system files, insert SSH keys into `/root/.ssh`, or edit `/etc/shadow` to gain root access on the worker node.
+* **Docker Socket Abuse**: Mounting `/var/run/docker.sock` or container runtime sockets allows a container to issue commands to the host container runtime, spinning up privileged containers or taking over the node.
+* **Credential Theft**: Mounting `/etc/kubernetes` or `/root/.kube` exposes cluster admin certificates, tokens, and node configuration parameters.
+
+> [!WARNING]
+> Restricting `hostPath` volumes is a key requirement of both the **Baseline** and **Restricted** profiles of the Kubernetes Pod Security Standards (PSS) and **MITRE ATT&CK: Privilege Escalation & Credential Access**.
+
+---
+
+## Two-Layer Defense-in-Depth (Kyverno + Falco)
+
+### 1. Kyverno (Admission Time Prevention)
+Kyverno intercepts API requests for `Pods` as well as higher-level workload controllers using `autogen` (`Deployments`, `DaemonSets`, `StatefulSets`, `Jobs`, `CronJobs`):
+
+```cel
+!has(object.spec.volumes) || !object.spec.volumes.exists(v, has(v.hostPath))
+```
+
+* **Logic**: If the resource has no `volumes` defined, it passes. If `volumes` exists, Kyverno verifies that **no** item `v` in `object.spec.volumes` contains a `hostPath` property.
+* **Autogen & VAP**: The policy uses `autogen.podControllers` to automatically generate validation rules for pod controllers and enables `validatingAdmissionPolicy` for native Kubernetes CEL admission enforcement.
+
+### 2. Falco (Runtime Detection)
+If a pod with `hostPath` volumes is deployed (or created directly by a node component), Falco acts as a secondary layer by monitoring file open syscalls (`open`, `openat`, `openat2`) targeting critical paths:
+
+```falco
+evt.type in (open, openat, openat2) and container and (
+  fd.name startswith "/etc/shadow" or
+  fd.name startswith "/etc/kubernetes" or
+  fd.name startswith "/var/run/docker.sock" or
+  fd.name startswith "/root/.ssh" or
+  fd.name startswith "/root/.kube"
+)
+```
+
+---
 
 ## Kyverno Policy Manifest
+
 ```yaml
 apiVersion: policies.kyverno.io/v1
 kind: ValidatingPolicy
@@ -33,13 +76,26 @@ spec:
         apiVersions: ["v1"]
         operations: [CREATE, UPDATE]
         resources: [pods]
+  autogen:
+    podControllers:
+      controllers:
+        - deployments
+        - daemonsets
+        - statefulsets
+        - jobs
+        - cronjobs
+    validatingAdmissionPolicy:
+      enabled: true
   validations:
     - message: "HostPath volumes are not allowed."
       expression: >-
         !has(object.spec.volumes) || !object.spec.volumes.exists(v, has(v.hostPath))
 ```
 
+---
+
 ## Falco Rule Manifest
+
 ```yaml
 apiVersion: v1
 kind: ConfigMap
@@ -71,21 +127,30 @@ data:
       tags: [kyverno_companion, hostpath, mitre_credential_access]
 ```
 
+---
+
 ## Detailed Explanation
+
 ### Kyverno Policy Manifest Explanation
-The Kyverno policy protects the host directory hierarchy:
-- **`validationActions`**: Set to `Deny` to block non-compliant requests at admission time.
-- **`validate.pattern.spec.=(volumes)`**: Checks the volumes list.
-- **`X(hostPath): "null"`**: The `X()` validation pattern represents "must not exist". If any volume specifies a `hostPath` key, the pod creation request is denied.
+This policy prevents mounting host directory structures into containers:
+- **`validationActions`**: Set to `Deny` to block non-compliant workloads at admission time.
+- **CEL Expression**: `!has(object.spec.volumes) || !object.spec.volumes.exists(v, has(v.hostPath))` evaluates each volume definition in the spec. If any volume defines `hostPath`, the expression evaluates to `false` and blocks creation.
+- **`autogen.podControllers`**: Automatically expands the policy to validate pod templates within `Deployments`, `DaemonSets`, `StatefulSets`, `Jobs`, and `CronJobs`.
+- **`validatingAdmissionPolicy.enabled: true`**: Compiles the Kyverno policy into a native Kubernetes `ValidatingAdmissionPolicy` for high-performance in-tree admission checks.
 
 ### Falco Rule Manifest Explanation
-The companion Falco rule detects host filesystem reads/writes:
-- **`evt.type in (open, openat, openat2)`**: Listens for file open syscall completions.
-- **`fd.name startswith "/etc/shadow"` or `/etc/kubernetes` or `/var/run/docker.sock`**: Targets system files and sockets. If any container opens files in these paths, it generates a `CRITICAL` alert since host paths should never be exposed to runtime workloads.
+The companion Falco rule detects unauthorized host path access at runtime:
+- **`evt.type in (open, openat, openat2)`**: Intercepts file open syscalls across all Linux file opening mechanisms.
+- **`container and fd.name startswith ...`**: Filters for file descriptors opened inside container environments that point to sensitive host directories.
+- **Priority**: `CRITICAL` — triggers an immediate alert when a container accesses protected host files or sockets.
+
+---
 
 ## How to Test
+
 ### Kyverno (Admission Check)
-Try to create a pod mounting a host path (it should be blocked immediately):
+Try to deploy a pod or deployment mounting a `hostPath` volume (it should be rejected immediately by admission control):
+
 ```bash
 kubectl apply -f - <<EOF
 apiVersion: v1
@@ -106,5 +171,11 @@ spec:
 EOF
 ```
 
+*Expected Result:*
+```text
+Error from server (Forbidden): admission webhook "vpol.validate.kyverno.svc-fail" denied the request:
+Policy disallow-hostpath-volumes failed: HostPath volumes are not allowed.
+```
+
 ### Falco (Runtime Check)
-Verify that any access to system critical paths like `/etc/shadow` generates a critical level alert: `Sensitive Host Path Accessed from Container`.
+If admission control is set to `Audit` mode or bypassed, accessing system critical paths like `/etc/shadow` from a container will generate a `CRITICAL` alert in Falco: `Sensitive Host Path Accessed from Container`.

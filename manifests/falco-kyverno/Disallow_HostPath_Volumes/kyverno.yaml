@@ -20,6 +20,16 @@ spec:
         apiVersions: ["v1"]
         operations: [CREATE, UPDATE]
         resources: [pods]
+  autogen:
+    podControllers:
+      controllers:
+        - deployments
+        - daemonsets
+        - statefulsets
+        - jobs
+        - cronjobs
+    validatingAdmissionPolicy:
+      enabled: true
   validations:
     - message: "HostPath volumes are not allowed."
       expression: >-
