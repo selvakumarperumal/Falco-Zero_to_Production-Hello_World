@@ -11,9 +11,22 @@ Centralized logging requires a sidecar container in every application pod to for
 
 This policy demonstrates **CEL JSONPatch mutation**, which is an alternative to `ApplyConfiguration` for cases where you need to append to arrays (e.g., adding a new container to `spec.containers`).
 
+### 🛡️ Problem Statement — What Are We Preventing?
+
+Centralized logging and observability are non-negotiable in production Kubernetes environments. Without a standardized sidecar injection mechanism, organizations face several critical problems:
+
+* **Inconsistent Log Collection**: When developers are responsible for manually adding logging sidecars to their Deployment manifests, some teams will forget, use different sidecar images, or misconfigure the log forwarding. This results in gaps in centralized log aggregation — during an incident, critical logs from some services may simply be missing.
+* **Debugging Blind Spots**: Without consistent log forwarding, incident responders cannot correlate events across microservices. A request that fails as it traverses multiple services becomes untraceable when some services don't export their logs to the central system.
+* **Manifest Maintenance Burden**: Manually maintaining sidecar container definitions (image versions, resource limits, volume mounts) across dozens or hundreds of Deployments creates a massive maintenance burden. Updating the Fluent Bit version requires touching every manifest individually.
+* **Configuration Drift**: Different teams may use different Fluent Bit versions, configurations, or resource allocations, leading to inconsistent behavior across the cluster. Some sidecars may consume excessive resources while others are under-provisioned and drop logs.
+* **Compliance Requirements**: Audit and compliance frameworks (SOC2, HIPAA, PCI-DSS) require comprehensive logging of application activity. Services without log forwarding sidecars represent compliance gaps that can result in audit findings.
+
+**Kyverno prevents this** by automatically injecting a standardized Fluent Bit logging sidecar into every pod that opts in via the `sidecar.kyverno.io/inject: "true"` annotation, ensuring consistent log collection configuration, version management, and resource allocation across the entire cluster.
+
 > **CEL Mutation Types Compared:**
 > - `patchType: ApplyConfiguration` — Best for modifying existing fields (labels, resources, etc.)
 > - `patchType: JSONPatch` — Best for adding/removing array elements (containers, volumes, etc.)
+
 
 ---
 

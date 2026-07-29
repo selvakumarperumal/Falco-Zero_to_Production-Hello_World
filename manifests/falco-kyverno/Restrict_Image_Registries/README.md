@@ -9,6 +9,19 @@
 ## Description
 Limits container deployments to approved corporate registries. Detects containers executing code using images sourced from unapproved domains.
 
+### 🛡️ Problem Statement — What Are We Preventing?
+
+Allowing pods to pull container images from any registry on the internet is one of the most significant supply chain risks in Kubernetes. Without registry restrictions, any developer can deploy containers from untrusted sources, introducing severe security threats:
+
+* **Malicious Image Injection (MITRE ATT&CK: T1525)**: Public container registries (Docker Hub, Quay.io, etc.) host millions of images, many of which contain embedded malware, crypto miners, backdoors, or vulnerable software. An attacker can publish a malicious image with a convincing name (e.g., `nginx-optimized`) and wait for developers to pull it.
+* **Typosquatting Attacks**: Attackers register image names that are slight misspellings of popular images (e.g., `ngixn/nginx`, `ubunty/ubuntu`). A developer who makes a typo in their Deployment manifest unknowingly deploys a compromised image.
+* **Supply Chain Poisoning**: Even legitimate public images may be compromised by upstream supply chain attacks. By restricting to curated corporate registries (ECR, GCR, GHCR), organizations ensure that only images that have passed internal security scanning, vulnerability assessment, and approval workflows are deployed.
+* **Data Exfiltration via Image Layers**: A malicious image can include hidden processes that exfiltrate environment variables, mounted secrets, and service account tokens at container startup — before any runtime security tool has a chance to detect the activity.
+* **Compliance and Audit Requirements**: Security standards (NIST SP 800-190, CIS Kubernetes Benchmark 5.5.1, FedRAMP) require that organizations maintain an approved list of container image sources and block deployment from unapproved registries. Using unrestricted registries fails these audit controls.
+
+**Kyverno prevents this** by validating that all container images in a pod spec come from approved registries (ECR, ghcr.io, gcr.io, registry.k8s.io, docker.io), blocking pods that reference images from unapproved sources. **Falco detects** containers running images from untrusted registries at runtime, alerting on workloads that bypassed admission controls.
+
+
 ## Kyverno Policy Manifest
 ```yaml
 apiVersion: policies.kyverno.io/v1

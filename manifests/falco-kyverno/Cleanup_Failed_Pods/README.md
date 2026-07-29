@@ -9,7 +9,18 @@
 ## Description
 Pods that enter the `Failed` phase (e.g. OOMKilled, ImagePullBackOff that exhausted retries, or evicted pods) remain in the cluster indefinitely unless explicitly deleted. This `DeletingPolicy` runs every 6 hours (`0 */6 * * *`) and removes any pod with `status.phase == 'Failed'`.
 
-> **Policy Type: `DeletingPolicy`** — Runs as a cron-scheduled background job, not an admission webhook.
+### 🛡️ Problem Statement — What Are We Preventing?
+
+Kubernetes does not automatically remove pods in the `Failed` phase. These zombie pods persist indefinitely, creating operational, security, and resource issues:
+
+* **Resource Waste**: Failed pods retain their resource reservations (CPU/memory requests) on the node even though they perform no useful work. In clusters with tight capacity, this phantom resource consumption can prevent healthy pods from being scheduled.
+* **Misleading Monitoring Signals**: Monitoring dashboards and alerting systems (Prometheus, Datadog, etc.) that track pod counts or failure rates produce inaccurate signals when stale failed pods inflate the failure metrics. Teams waste time investigating stale failures instead of focusing on active incidents.
+* **Security Information Leakage**: Failed pods may contain environment variables, mounted secrets, or configuration data in their spec. Leaving them in the cluster extends the exposure window for anyone with `kubectl describe` access to read sensitive configuration.
+* **Namespace Clutter**: In CI/CD-heavy clusters where pipelines spawn hundreds of ephemeral pods, failed pods accumulate rapidly and make `kubectl get pods` output unmanageable, slowing operational debugging.
+* **ResourceQuota Exhaustion**: Failed pods count against namespace-level ResourceQuota object counts, potentially blocking creation of new pods in quota-constrained namespaces.
+
+**Kyverno prevents this** by running a `DeletingPolicy` every 6 hours that evaluates each pod's `status.phase` field and automatically removes any pod in the `Failed` state, keeping namespaces clean and resource accounting accurate.
+
 
 ---
 

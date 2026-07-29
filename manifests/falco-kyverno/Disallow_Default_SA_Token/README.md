@@ -9,6 +9,19 @@
 ## Description
 Enforces setting `automountServiceAccountToken: false` on pods utilizing the `default` service account to prevent default service account token mounting. Simultaneously detects runtime access to service account token files.
 
+### 🛡️ Problem Statement — What Are We Preventing?
+
+By default, Kubernetes automatically mounts a service account token into every pod at `/var/run/secrets/kubernetes.io/serviceaccount/token`. When a pod uses the `default` service account (which happens when no explicit SA is specified), this token grants the pod credentials to authenticate against the Kubernetes API server. This is a critical attack vector:
+
+* **Kubernetes API Abuse (MITRE ATT&CK: T1552.007)**: If an attacker compromises an application container (e.g., via an RCE vulnerability), the auto-mounted token gives them immediate, authenticated access to the Kubernetes API. They can list pods, secrets, services, and config maps — and depending on RBAC misconfigurations, potentially create or modify resources.
+* **Lateral Movement**: With a valid service account token, an attacker can enumerate other namespaces, discover services, and pivot to other workloads. The `default` SA token is especially dangerous because it exists in every namespace and is often overlooked in RBAC hardening efforts.
+* **Secret Exfiltration**: In clusters with overly permissive RBAC, the `default` service account may have implicit read access to secrets. An attacker with the token can run `kubectl get secrets` from within the container to exfiltrate database passwords, API keys, and TLS certificates.
+* **Persistent Backdoor Installation**: With write access via the API, attackers can create new pods, deploy CronJobs, or modify existing workloads to establish persistence — all using the auto-mounted token.
+* **Unnecessary Blast Radius**: Most application pods never need to interact with the Kubernetes API. Mounting a token "just in case" violates the principle of least privilege and expands the blast radius of any container compromise.
+
+**Kyverno prevents this** by validating that any pod using the `default` service account explicitly sets `automountServiceAccountToken: false`. **Falco detects** runtime access to the token file at `/var/run/secrets/kubernetes.io/serviceaccount/`, alerting security teams when any process attempts to read the mounted credentials.
+
+
 ## Kyverno Policy Manifest
 ```yaml
 apiVersion: policies.kyverno.io/v1

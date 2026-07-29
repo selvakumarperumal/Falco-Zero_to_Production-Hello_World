@@ -9,6 +9,19 @@
 ## Description
 Ensures that `allowPrivilegeEscalation` is configured as false (preventing sub-processes from gaining more privileges than their parent). Detects execution of setuid/setgid binaries inside containers.
 
+### 🛡️ Problem Statement — What Are We Preventing?
+
+The Linux kernel's `no_new_privs` flag controls whether child processes can gain more privileges than their parent. When `allowPrivilegeEscalation` is not explicitly set to `false`, Kubernetes allows containers to execute setuid/setgid binaries — programs that run with the permissions of their file owner (typically root) regardless of who invokes them. This is a critical privilege escalation vector:
+
+* **Setuid Binary Abuse (MITRE ATT&CK: T1548.001)**: Binaries like `sudo`, `su`, `passwd`, `newgrp`, `chfn`, and `pkexec` have the setuid bit set, meaning they execute with root (UID 0) privileges. An attacker who gains code execution inside a container running as a non-root user can invoke these binaries to escalate to root within the container.
+* **Container Breakout Amplification**: Privilege escalation inside a container is often a prerequisite for container escape. Once running as root within the container, an attacker can exploit kernel vulnerabilities (e.g., CVE-2022-0185, CVE-2022-0847 "Dirty Pipe") that require root privileges to achieve host-level access.
+* **Capability Elevation**: Even without full root access, setuid binaries can grant additional Linux capabilities. For example, `ping` uses `CAP_NET_RAW`, and a crafted setuid binary could manipulate capability sets to gain `CAP_SYS_ADMIN` or `CAP_DAC_OVERRIDE`.
+* **Bypassing Non-Root Enforcement**: Organizations that enforce `runAsNonRoot: true` may believe their containers are safe from root-level attacks. However, without `allowPrivilegeEscalation: false`, a non-root container can still escalate to root via setuid binaries, undermining the non-root policy entirely.
+* **Compliance Requirement**: The Kubernetes Pod Security Standards (Restricted profile) mandates `allowPrivilegeEscalation: false` as a required field. CIS Kubernetes Benchmark control 5.2.5 explicitly requires this setting.
+
+**Kyverno prevents this** by validating that every container (including init containers) explicitly sets `allowPrivilegeEscalation: false` in its `securityContext`. **Falco detects** the runtime execution of known setuid/setgid binaries (`sudo`, `su`, `passwd`, `pkexec`, etc.) inside containers, alerting on privilege escalation attempts that bypass admission controls.
+
+
 ## Kyverno Policy Manifest
 ```yaml
 apiVersion: policies.kyverno.io/v1

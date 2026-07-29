@@ -9,6 +9,19 @@
 ## Description
 Detects unauthorized access/reading of credentials, security files (`/etc/shadow`, `/etc/gshadow`, `/etc/master.passwd`), private keys (`.pem`, `.key`), or SSH keys inside a container.
 
+### 🛡️ Problem Statement — What Are We Preventing?
+
+Containers often contain or have access to sensitive credential files that are high-value targets for attackers. Reading these files is a core credential access technique that enables further compromise:
+
+* **Password Hash Harvesting (MITRE ATT&CK: T1003.008)**: Files like `/etc/shadow` and `/etc/gshadow` contain hashed user passwords. An attacker who reads these files can perform offline brute-force or dictionary attacks to crack passwords, gaining access to user accounts on the container or — if password reuse is common — on other systems.
+* **Private Key Exfiltration**: TLS private keys (`.pem`, `.key`, `.p12`, `.pfx`) used for HTTPS, mTLS, or code signing can be stolen from containers that process encrypted traffic. With a stolen private key, an attacker can decrypt captured network traffic, impersonate the service, or sign malicious code.
+* **SSH Key Theft**: SSH private keys (`id_rsa`, `id_ed25519`) found inside containers enable direct SSH access to other servers and systems that trust those keys. This is a common lateral movement technique — one compromised container can yield SSH access to dozens of other systems.
+* **Kubernetes Secret Exposure**: Containers may have mounted secrets at predictable paths. An attacker reading these credential files can harvest database passwords, API tokens, and cloud provider credentials that enable access to external services and data stores.
+* **Supply Chain Risk**: Base images may inadvertently include credential files from the build environment. An attacker who can read the container filesystem may discover credentials that were accidentally baked into the image layer.
+
+**Falco detects this** by monitoring file open syscalls (`open`, `openat`, `openat2`) with read access to known credential file paths and extensions inside containers, firing an `ERROR` alert while exempting legitimate processes like `sshd` and `ssh-agent` that have a valid need to access key files.
+
+
 ## Falco Rule Manifest
 ```yaml
 apiVersion: v1

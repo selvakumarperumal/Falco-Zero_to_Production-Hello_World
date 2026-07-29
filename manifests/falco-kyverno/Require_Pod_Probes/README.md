@@ -9,6 +9,19 @@
 ## Description
 Enforces configuration of liveness and readiness health probes for app reliability. Detects crash loops (rapid container restarts with exit code) at runtime.
 
+### 🛡️ Problem Statement — What Are We Preventing?
+
+Without health probes, Kubernetes has no visibility into whether an application inside a container is actually functioning correctly. A container can be "Running" from Kubernetes' perspective while the application inside has crashed, deadlocked, or become unresponsive:
+
+* **Zombie Processes and Silent Failures**: A Java application may throw an `OutOfMemoryError` and stop processing requests, but the JVM process continues running. Without a `livenessProbe`, Kubernetes considers the pod healthy and never restarts it — the application is effectively dead but Kubernetes doesn't know.
+* **Traffic Black Holes**: Without a `readinessProbe`, Kubernetes immediately adds a pod to the Service's endpoint list as soon as it starts, even if the application hasn't finished initialization (loading caches, establishing database connections, warming up). Incoming requests hit the pod before it's ready, resulting in errors and degraded user experience.
+* **Cascading Outages**: When a pod without readiness probes fails silently, the load balancer continues routing traffic to it. As error rates increase, retry storms from clients overwhelm remaining healthy pods, creating a cascade that can take down the entire service.
+* **Undetected Memory Leaks**: Applications with slow memory leaks gradually degrade over hours or days. Without liveness probes that check application health (not just process existence), these pods are never restarted, leading to progressive performance degradation.
+* **Deployment Rollout Blindness**: Without readiness probes, Kubernetes rolling updates cannot distinguish between a pod that's still starting up and one that's failed to start. This can result in all pods being replaced simultaneously, causing a complete outage during deployments.
+
+**Kyverno prevents this** by validating that every container in a pod spec defines both `livenessProbe` and `readinessProbe`, ensuring Kubernetes can detect unhealthy pods, remove them from traffic rotation, and restart them automatically. **Falco detects** rapid container crash loops at runtime, alerting on applications that may be bypassing or misconfiguring health checks.
+
+
 ## Kyverno Policy Manifest
 ```yaml
 apiVersion: policies.kyverno.io/v1

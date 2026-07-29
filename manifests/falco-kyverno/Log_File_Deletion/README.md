@@ -9,6 +9,19 @@
 ## Description
 Detects deletion or renaming of log files (`/var/log/*`, `*.log`, `syslog`, `history`) inside a container, indicating attempts to cover tracks or delete audit records.
 
+### 🛡️ Problem Statement — What Are We Preventing?
+
+Log files are the primary evidence source during security incident investigations. When an attacker gains access to a container, one of their first objectives is to destroy or tamper with logs to eliminate traces of their activity. This anti-forensics technique is a critical defense evasion tactic:
+
+* **Evidence Destruction (MITRE ATT&CK: T1070.002)**: Attackers routinely delete `/var/log/*` files, `.bash_history`, `auth.log`, and `syslog` to erase records of their commands, login attempts, and privilege escalation activities. Without detection of log deletion, the security team may never know that a compromise occurred.
+* **Compliance Violations**: Regulatory frameworks (PCI-DSS Requirement 10.7, HIPAA §164.312(b), SOC2 CC7.2) require that audit logs be preserved and protected from tampering. Log deletion inside containers represents a direct compliance violation that can result in regulatory penalties.
+* **Blind Incident Response**: When logs are deleted before they can be forwarded to a centralized logging system (e.g., Elasticsearch, Splunk, Loki), incident responders lose visibility into what happened inside the container. This creates a forensic gap that prevents accurate root cause analysis, blast radius assessment, and timeline reconstruction.
+* **History File Tampering**: Shell history files (`.bash_history`, `.zsh_history`) contain a sequential record of every command an attacker executed. Deleting these files is a standard post-exploitation cleanup step that removes the most direct evidence of attacker activity.
+* **Lateral Movement Cover-Up**: Attackers who pivot from one container to another often clean up logs in each compromised container to prevent security teams from mapping the full attack path across the cluster.
+
+**Falco detects this** by monitoring file-related syscalls (`unlink`, `unlinkat`, `rename`, `renameat`) targeting log file paths and patterns, firing an `ERROR` alert when log files are deleted or renamed — excluding legitimate processes like `logrotate` and `journald` that perform authorized log management.
+
+
 ## Falco Rule Manifest
 ```yaml
 apiVersion: v1

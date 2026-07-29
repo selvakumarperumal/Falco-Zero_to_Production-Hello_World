@@ -9,6 +9,19 @@
 ## Description
 Blocks Services using `type: NodePort` which bypasses Ingress/LoadBalancers and exposes host-level ports. Detects containers binding to unexpected non-standard listening ports at runtime.
 
+### 🛡️ Problem Statement — What Are We Preventing?
+
+NodePort services allocate a port in the range 30000–32767 on **every node** in the cluster, making the service directly reachable from outside the cluster via `<NodeIP>:<NodePort>`. While convenient for quick testing, this creates significant security and operational risks in production:
+
+* **Uncontrolled External Exposure**: NodePort bypasses centralized ingress controllers (NGINX, Traefik, Istio Gateway) that provide TLS termination, rate limiting, WAF protection, and authentication. Traffic arrives directly at the service without any of these security layers.
+* **Attack Surface Expansion**: Every NodePort service opens a port on every worker node in the cluster. External port scanners can discover these ports and directly probe the exposed services. In cloud environments, this may inadvertently expose internal services to the public internet if security groups are misconfigured.
+* **Network Policy Bypass**: Kubernetes NetworkPolicies operate at the pod/namespace level, but NodePort traffic arrives at the node's network stack before network policies are applied, potentially allowing traffic that should be blocked by zero-trust network segmentation.
+* **Port Conflict and Exhaustion**: The NodePort range is limited (2768 ports). In large clusters with many teams, uncontrolled NodePort usage leads to port conflicts and exhaustion, causing deployment failures.
+* **Compliance Violations**: Security standards like CIS Kubernetes Benchmark and PCI-DSS recommend against using NodePort for external access, requiring load balancers or ingress controllers that provide centralized access logging and audit trails.
+
+**Kyverno prevents this** by validating that no Service object specifies `type: NodePort`, forcing teams to use `ClusterIP` with Ingress or `LoadBalancer` for controlled external access. **Falco detects** containers binding to unexpected ports at runtime, catching potential backdoor listeners that bypass normal service configuration.
+
+
 ## Kyverno Policy Manifest
 ```yaml
 apiVersion: policies.kyverno.io/v1

@@ -9,6 +9,19 @@
 ## Description
 Detects creation of symlinks pointing to host or container-sensitive paths (`/etc/`, `/proc/`, `/sys/`, `/var/run/`). Useful for capturing symlink-based path traversal exploits (e.g. CVE-2021-25741).
 
+### 🛡️ Problem Statement — What Are We Preventing?
+
+Symbolic links (symlinks) are a powerful attack primitive that allows attackers to bypass directory restrictions and access files outside their intended scope. In containerized environments, symlink attacks are a proven container escape technique:
+
+* **Container Escape via Symlink Race (CVE-2021-25741)**: This critical Kubernetes vulnerability allowed an attacker to create a symlink inside a container that pointed to the host filesystem. By exploiting a race condition in the kubelet's volume mounting logic, the attacker could trick Kubernetes into mounting arbitrary host paths into the container — achieving full host filesystem access and container escape.
+* **Path Traversal Attacks (MITRE ATT&CK: T1083)**: An attacker can create a symlink inside a container (e.g., `ln -s /etc/shadow /tmp/data`) to bypass file access controls. If any process follows the symlink (application code, logging agents, backup tools), it inadvertently reads or writes to the sensitive target file.
+* **Bypassing Read-Only Root Filesystem**: Even with `readOnlyRootFilesystem: true`, writable volume mounts (e.g., `/tmp`) allow symlink creation. An attacker can create symlinks in writable directories that point to protected paths (`/proc/`, `/sys/`, `/var/run/`), bypassing the read-only protection for any process that follows symlinks.
+* **Container Runtime Exploitation**: Symlinks pointing to `/proc/` or `/sys/` can be used to manipulate kernel parameters, access process memory, or interact with device files — escalating from application-level access to kernel-level control.
+* **Persistent Access via /var/run/**: Symlinks to `/var/run/` can target container runtime sockets (e.g., `docker.sock`, `containerd.sock`), enabling an attacker to control the container runtime and spawn new privileged containers on the host.
+
+**Falco detects this** by monitoring `symlink` and `symlinkat` syscalls inside containers, firing a `CRITICAL` alert when any process creates a symbolic link targeting sensitive system directories (`/etc/`, `/proc/`, `/sys/`, `/var/run/`).
+
+
 ## Falco Rule Manifest
 ```yaml
 apiVersion: v1

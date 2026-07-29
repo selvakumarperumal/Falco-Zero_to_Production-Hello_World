@@ -9,6 +9,19 @@
 ## Description
 Ensures any container specifying the `:latest` tag is updated to use `imagePullPolicy: Always` at admission time. This guarantees that stale cached images are not accidentally reused.
 
+### 🛡️ Problem Statement — What Are We Preventing?
+
+When containers use the `:latest` tag with the default `imagePullPolicy` of `IfNotPresent`, Kubernetes only pulls the image if it doesn't already exist in the node's local cache. This creates a dangerous combination of problems:
+
+* **Stale Image Execution**: Different nodes in the cluster may have different cached versions of the `latest` tag. When pods are rescheduled to different nodes, they silently run different image versions — creating inconsistent application behavior across the cluster that is extremely difficult to debug.
+* **Tag Hijacking Blindness (MITRE ATT&CK: T1525)**: If an attacker compromises a container registry and overwrites the `:latest` tag with a malicious image, nodes using `IfNotPresent` will continue running the old (safe) cached image while new nodes or pods will pull the compromised version. This creates a split-brain scenario where some pods are compromised and others are not, making detection harder.
+* **Rollback Failure**: When using `:latest` with `IfNotPresent`, rolling back a deployment doesn't actually change the running image — the node's cache still contains the same tag. Teams believe they've rolled back, but the application continues running the problematic version.
+* **CI/CD Pipeline Inconsistency**: Build pipelines that push to `:latest` expect their latest code to be deployed. But with `IfNotPresent`, Kubernetes may skip the pull entirely and run a days-old cached image, causing confusion when newly deployed code doesn't appear to take effect.
+* **Security Patch Gaps**: When critical security patches are applied by rebuilding and pushing to `:latest`, nodes with cached images won't pull the patched version, leaving vulnerable images running indefinitely.
+
+**Kyverno prevents this** by automatically mutating the `imagePullPolicy` to `Always` for any container using the `:latest` tag or an untagged image reference, ensuring that every pod start pulls the freshest image from the registry — eliminating stale cache issues without requiring developers to remember to set the pull policy.
+
+
 ## Kyverno Policy Manifest
 ```yaml
 apiVersion: policies.kyverno.io/v1

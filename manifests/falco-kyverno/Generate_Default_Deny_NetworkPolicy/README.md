@@ -9,6 +9,19 @@
 ## Description
 Automatically generates a default-deny NetworkPolicy for any newly created namespace to ensure zero-trust segmentation. Detects unexpected outbound connections outside internal cluster network ranges at runtime.
 
+### 🛡️ Problem Statement — What Are We Preventing?
+
+By default, Kubernetes networking is **fully permissive** — every pod can communicate with every other pod in the cluster, regardless of namespace, with no restrictions on ingress or egress traffic. This flat network model is one of the most exploited attack surfaces in Kubernetes:
+
+* **Unrestricted Lateral Movement (MITRE ATT&CK: T1021)**: When an attacker compromises a single pod, the default-allow network model lets them reach every other pod in the cluster. They can scan for databases, API services, admin interfaces, and other high-value targets across all namespaces without any network-level barrier.
+* **Data Exfiltration**: Without egress restrictions, a compromised pod can freely connect to external servers to exfiltrate stolen data, download malicious payloads, or establish command-and-control (C2) channels. The attacker can stream sensitive data out of the cluster with zero resistance.
+* **Blast Radius Amplification**: A single vulnerable microservice can become the entry point for a cluster-wide compromise. Without network segmentation, the blast radius of any security incident extends to every pod and service in the cluster.
+* **Compliance Violations**: Frameworks like PCI-DSS (Requirement 7), NIST SP 800-190, and CIS Kubernetes Benchmark require network segmentation and default-deny policies. Operating without them can result in audit failures and regulatory penalties.
+* **Human Error**: Relying on developers to manually create NetworkPolicies in every namespace is unreliable. New namespaces created for testing, CI/CD pipelines, or feature branches are frequently left without any network restrictions, creating security gaps.
+
+**Kyverno prevents this** by automatically generating a default-deny NetworkPolicy (blocking both ingress and egress) in every newly created namespace, establishing a zero-trust network baseline. Teams must then explicitly create allow policies for their required communication paths. **Falco detects** unexpected outbound connections to public IP addresses at runtime, alerting on potential exfiltration or C2 activity that bypasses network policies.
+
+
 ## Kyverno Policy Manifest
 ```yaml
 apiVersion: policies.kyverno.io/v1

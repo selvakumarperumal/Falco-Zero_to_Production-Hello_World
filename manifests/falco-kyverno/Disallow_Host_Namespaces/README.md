@@ -9,6 +9,11 @@
 ## Description
 Blocks pods sharing host PID, IPC, or Network namespaces (which breaks container node isolation). Detects namespace clone flags at runtime.
 
+### 🛡️ Problem Statement — What Are We Preventing?
+
+Host namespace sharing (`hostPID`, `hostIPC`, `hostNetwork`) is one of the most dangerous Kubernetes misconfigurations. It completely breaks the Linux namespace isolation that makes containers secure. See the detailed explanation in [Why Sharing Host Namespaces is Dangerous](#why-sharing-host-namespaces-is-dangerous) below.
+
+
 ---
 
 ## What is a "Host Namespace"?

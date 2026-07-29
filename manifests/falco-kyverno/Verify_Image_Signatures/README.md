@@ -9,6 +9,18 @@
 ## Description
 Supply chain attacks targeting container images (e.g., injecting malicious layers, tag hijacking) are a critical Kubernetes threat vector. This `ImageValidatingPolicy` enforces that all container images from `ghcr.io/*` are signed using [Cosign](https://github.com/sigstore/cosign) with a public key. The policy uses Kyverno's CEL function `verifyImageSignatures()` to cryptographically verify image signatures at admission time.
 
+### 🛡️ Problem Statement — What Are We Preventing?
+
+Container images are the fundamental unit of deployment in Kubernetes. If an attacker can tamper with an image between build and deployment, they can inject arbitrary code into production — affecting every pod that uses that image. Without cryptographic signature verification, organizations are blind to image tampering:
+
+* **Supply Chain Attacks (MITRE ATT&CK: T1195.002)**: Attackers can compromise CI/CD pipelines, container registries, or build systems to inject malicious code into container images. High-profile attacks like SolarWinds and Codecov demonstrated that supply chain compromise can go undetected for months while affecting thousands of organizations.
+* **Tag Hijacking**: Container image tags are mutable — an attacker who gains write access to a registry can overwrite an existing tag (e.g., `v1.5.0`) with a malicious image. All subsequent deployments using that tag will pull the compromised image. Signature verification ensures that the image content matches what was originally signed by the authorized builder.
+* **Registry Compromise**: If a container registry is compromised, all images stored in it become untrusted. Without signature verification, there's no way to distinguish between legitimate images and those modified by the attacker. Cryptographic signatures provide an independent trust anchor that remains valid even if the registry is compromised.
+* **Insider Threats**: A malicious insider with registry push access can modify production images to include backdoors, data exfiltration code, or crypto miners. Signature verification ensures that only images signed by authorized keys can be deployed, regardless of who pushed them to the registry.
+* **Compliance Requirements**: Frameworks like SLSA (Supply Chain Levels for Software Artifacts), NIST SSDF, and Executive Order 14028 require software artifact signing and verification as a mandatory supply chain security practice.
+
+**Kyverno prevents this** by using an `ImageValidatingPolicy` that cryptographically verifies Cosign signatures on every container image at admission time. Unsigned or incorrectly signed images are flagged (Audit) or rejected (Deny), ensuring that only trusted, verified images run in the cluster.
+
 > **Policy Type: `ImageValidatingPolicy`** — A specialized policy type designed exclusively for image signature and attestation verification. It provides CEL functions (`verifyImageSignatures`, `verifyAttestationSignatures`, `extractPayload`) not available in standard `ValidatingPolicy`.
 
 ---

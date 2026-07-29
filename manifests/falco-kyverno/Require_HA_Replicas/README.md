@@ -12,10 +12,23 @@ Single-replica Deployments in production are a reliability risk — a single pod
 - **`matchConditions`** with `namespaceObject` to scope the policy to production namespaces.
 - **`messageExpression`** for dynamic, context-rich denial messages that include the actual replica count.
 
+### 🛡️ Problem Statement — What Are We Preventing?
+
+Running Deployments with a single replica in production creates a single point of failure that can cause complete service outages. This is a fundamental reliability anti-pattern:
+
+* **Zero-Downtime Failure**: When a single-replica pod is terminated (node failure, OOM kill, preemption, or eviction), the service becomes completely unavailable until Kubernetes schedules and starts a replacement pod. Depending on image pull times, health check startup probes, and readiness gates, this downtime can range from seconds to minutes.
+* **Rolling Update Failures**: Kubernetes rolling updates work by scaling up new pods before scaling down old ones. With only 1 replica, rolling updates temporarily have zero running instances during the transition, causing brief but repeated outages on every deployment.
+* **Node Failure Blast Radius**: If the single node hosting a single-replica pod fails (hardware failure, kernel panic, spot instance reclaim), the pod is lost entirely. The Kubernetes scheduler must find a new node, pull the image, and pass readiness checks — a process that can take several minutes in large clusters.
+* **SLA Violations**: Production services typically have uptime SLAs (99.9% = ~8.7 hours/year, 99.95% = ~4.4 hours/year). A single node failure causing 5+ minutes of downtime per incident quickly exhausts the annual downtime budget if the service has only one replica.
+* **Pod Disruption Budget Ineffectiveness**: PodDisruptionBudgets (PDBs) are meaningless with a single replica — there's no way to maintain availability during voluntary disruptions (node drains, cluster upgrades) when there's only one pod to begin with.
+
+**Kyverno prevents this** by validating that all Deployments in production namespaces (labeled `environment=production`) have at least 2 replicas, ensuring high availability and resilience against individual pod or node failures.
+
 > **Advanced CEL Features Demonstrated:**
 > - `namespaceObject.metadata.labels` — Access the namespace object's labels for conditional scoping.
 > - `messageExpression` — Dynamic CEL string concatenation for human-readable error messages.
 > - `string()` — CEL type casting function to convert integers to strings.
+
 
 ---
 

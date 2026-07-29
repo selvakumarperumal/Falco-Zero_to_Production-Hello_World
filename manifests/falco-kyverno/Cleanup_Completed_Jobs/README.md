@@ -9,7 +9,18 @@
 ## Description
 Completed Jobs accumulate in the cluster over time, consuming etcd storage and cluttering `kubectl get jobs` output. This `DeletingPolicy` runs on a cron schedule (`0 2 * * *`) and evaluates CEL conditions against all matching Jobs. If a Job has a `Complete` status condition, it is automatically deleted.
 
-> **Policy Type: `DeletingPolicy`** — This is NOT an admission webhook. It runs as a background cron job managed by the Kyverno cleanup controller, independently of resource creation/update events.
+### 🛡️ Problem Statement — What Are We Preventing?
+
+Kubernetes does not automatically clean up completed Jobs. Over weeks and months, thousands of stale Job objects pile up in the cluster, creating several operational and security issues:
+
+* **etcd Storage Exhaustion**: Every completed Job object (including its pod template, status history, and metadata) persists in etcd. In clusters running frequent CronJobs or batch workloads, this can consume gigabytes of etcd storage, degrading API server performance and increasing backup times.
+* **Operational Noise**: `kubectl get jobs` becomes unusable when thousands of completed Jobs clutter namespace listings, making it difficult for operators to identify currently running or failed jobs that need attention.
+* **Audit Log Inflation**: Stale Jobs continue to appear in RBAC audit logs and monitoring dashboards, making security investigations and compliance audits harder by hiding meaningful events in a sea of irrelevant completed entries.
+* **Resource Quota Pressure**: In namespaces with ResourceQuotas on object counts, accumulated Jobs can block creation of new Jobs, causing CronJob schedules to fail silently.
+* **Incident Response Confusion**: During a production incident, operators scanning for failing workloads must mentally filter out hundreds of old completed Jobs, slowing mean-time-to-recovery (MTTR).
+
+**Kyverno prevents this** by running a `DeletingPolicy` on a cron schedule that evaluates each Job's status and automatically removes Jobs that have completed successfully, keeping the cluster clean without any manual intervention.
+
 
 ---
 

@@ -9,6 +9,19 @@
 ## Description
 Enforces setting the root filesystem as read-only, restricting writable storage to ephemeral/persistent volumes. Detects write attempts to unauthorized root directory structures.
 
+### 🛡️ Problem Statement — What Are We Preventing?
+
+By default, containers have a writable root filesystem, meaning any process inside the container can create, modify, or delete files anywhere in the filesystem. This writable surface is a critical enabler for multiple attack techniques:
+
+* **Malware Persistence (MITRE ATT&CK: T1546)**: An attacker who gains code execution inside a container can write malicious binaries, scripts, or backdoors directly to the filesystem. These persist across process restarts within the same container lifecycle, allowing the attacker to maintain access even if their initial exploit vector is patched.
+* **Web Shell Installation**: One of the most common post-exploitation actions is writing a web shell (e.g., a PHP or JSP file) to the application's web root. With a writable filesystem, attackers can drop web shells that provide persistent remote access via HTTP — completely bypassing network-level security controls.
+* **Binary Tampering**: Attackers can replace legitimate binaries (e.g., `/usr/bin/curl`, `/usr/bin/wget`) with trojanized versions that exfiltrate data or maintain command-and-control channels. With a read-only filesystem, any attempt to modify system binaries fails immediately.
+* **Configuration Poisoning**: Critical configuration files (`/etc/resolv.conf`, `/etc/hosts`, application config files) can be modified by an attacker to redirect DNS queries, intercept traffic, or change application behavior — enabling man-in-the-middle attacks from within the container.
+* **Container Immutability Principle**: The principle of immutable infrastructure requires that containers be identical to their image at all times. A writable filesystem violates this principle, making it impossible to guarantee that what's running in production matches what was built, tested, and scanned in CI/CD.
+
+**Kyverno prevents this** by validating that every container sets `readOnlyRootFilesystem: true` in its `securityContext`, forcing developers to explicitly declare writable paths as volume mounts (e.g., `emptyDir` for `/tmp`). **Falco detects** runtime write attempts to the container root filesystem, alerting on potential malware installation or configuration tampering.
+
+
 ## Kyverno Policy Manifest
 ```yaml
 apiVersion: policies.kyverno.io/v1

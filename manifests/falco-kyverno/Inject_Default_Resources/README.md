@@ -9,7 +9,18 @@
 ## Description
 Enforces cloud-native resource management best practices. When developers submit Pod manifests without specifying CPU or memory requests, Kyverno mutates the incoming object at admission time to inject default baseline requests (`100m` CPU, `128Mi` Memory). This prevents unconstrained pods from starving cluster node capacity.
 
----
+### 🛡️ Problem Statement — What Are We Preventing?
+
+When pods are deployed without CPU or memory resource requests, the Kubernetes scheduler treats them as having zero resource requirements. This creates a cascade of operational and stability problems:
+
+* **Node Resource Starvation**: Pods without requests can consume unlimited CPU and memory. A single unconstrained pod running a memory leak or CPU-intensive task can starve all other pods on the same node, causing widespread degraded performance or OOM kills.
+* **Scheduler Blindness**: The Kubernetes scheduler uses resource requests to make placement decisions. Pods without requests appear "free" to the scheduler, leading to node over-commitment where the scheduler packs too many workloads onto a single node, unaware of their actual resource consumption.
+* **Noisy Neighbor Impact**: In multi-tenant clusters, teams deploying pods without resource requests consume shared node capacity unfairly. One team's uncontrolled workload can degrade performance for all other teams sharing the same node pool.
+* **OOM Kill Cascades**: Without memory requests, the Linux kernel's OOM killer has no `cgroup` limits to enforce. When a node runs out of memory, the OOM killer selects victims unpredictably — potentially killing critical system pods (`kubelet`, `kube-proxy`) or other production workloads instead of the offending unconstrained pod.
+* **Cost Management Failure**: Cloud cost optimization tools (e.g., Kubecost, Spot.io) rely on resource requests to calculate per-team/per-namespace costs. Pods without requests cannot be accurately attributed, making cost allocation impossible and hiding waste.
+
+**Kyverno prevents this** by automatically injecting baseline CPU (`100m`) and memory (`128Mi`) requests into any container that omits them, ensuring the scheduler has accurate resource information for every pod. **Falco provides** runtime monitoring for unconstrained containers running in non-system namespaces.
+
 
 ## Kyverno Policy Manifest
 ```yaml

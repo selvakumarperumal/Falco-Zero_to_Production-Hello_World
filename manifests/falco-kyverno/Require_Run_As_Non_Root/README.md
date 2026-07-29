@@ -9,6 +9,19 @@
 ## Description
 Ensures containers run as non-root users (UID != 0). Monitors and alerts on root UID execution at runtime.
 
+### 🛡️ Problem Statement — What Are We Preventing?
+
+Running containers as root (UID 0) is one of the most common and dangerous misconfigurations in Kubernetes. Even though containers provide namespace isolation, running as root inside a container significantly increases the impact of any vulnerability:
+
+* **Kernel Exploit Prerequisites**: The most impactful container escape vulnerabilities (CVE-2022-0185, CVE-2022-0847 "Dirty Pipe", CVE-2024-21626 "Leaky Vessels") require root privileges inside the container to exploit. Running as non-root eliminates an entire class of container escape attacks by denying the initial privilege requirement.
+* **Full Filesystem Access**: A process running as UID 0 can read and write any file inside the container, including mounted secrets (`/var/run/secrets`), configuration files, and application data. A non-root process is restricted by Linux file permissions, limiting the blast radius of a compromise.
+* **Process Manipulation**: Root inside a container can use `ptrace` to attach to other processes, send signals to any process, and modify the process environment — enabling injection attacks, credential harvesting, and process hijacking.
+* **Device and Socket Access**: Root can access device files in `/dev`, Unix sockets, and network interfaces that would be restricted for non-root users. This enables attacks like container runtime socket abuse, raw network packet crafting, and storage device manipulation.
+* **Compliance Requirement**: The Kubernetes Pod Security Standards (Restricted profile) mandates `runAsNonRoot: true`. CIS Kubernetes Benchmark control 5.2.6 requires running containers as non-root users. NIST SP 800-190 recommends running containers with the least privilege necessary.
+
+**Kyverno prevents this** by validating that pods either set `runAsNonRoot: true` at the pod-level `securityContext` or at the individual container-level `securityContext`, blocking any pod that would run as root. **Falco detects** processes executing with UID 0 inside application containers at runtime, alerting on root execution that bypasses admission controls.
+
+
 ## Kyverno Policy Manifest
 ```yaml
 apiVersion: policies.kyverno.io/v1

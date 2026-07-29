@@ -9,6 +9,19 @@
 ## Description
 Detects when an interactive shell (e.g., `bash`, `sh`, `zsh`) is spawned inside a container. This is a crucial runtime indicator of compromise or unauthorized access.
 
+### 🛡️ Problem Statement — What Are We Preventing?
+
+In production Kubernetes environments, containers should run predefined application processes — not interactive shells. The spawning of an interactive shell inside a container is one of the strongest indicators that an attacker has gained unauthorized access or that an operator is performing risky ad-hoc actions:
+
+* **Post-Exploitation Indicator (MITRE ATT&CK: T1059.004)**: After exploiting a vulnerability (e.g., RCE, SSRF, deserialization flaw) in a containerized application, an attacker's first action is typically to spawn an interactive shell to explore the environment, read configuration files, discover secrets, and plan lateral movement. Detecting this shell spawn is often the earliest possible signal of a container compromise.
+* **kubectl exec Abuse**: In organizations without strict RBAC controls, developers or operators may use `kubectl exec -it <pod> -- bash` to access production containers directly. This bypasses change management processes, creates unaudited access, and can introduce configuration drift or accidental damage to running applications.
+* **Insider Threat Detection**: Malicious insiders with cluster access may use interactive shells to exfiltrate data, modify application behavior, or install backdoors. Without shell spawn detection, these activities leave no trace in standard application logs.
+* **Immutability Violation**: The principle of container immutability dictates that containers should not be modified at runtime. An interactive shell session inherently violates this principle — any changes made during the session (installed packages, modified configs, written files) are untracked and lost on restart, creating unpredictable behavior.
+* **Compliance and Audit Requirements**: Security frameworks (SOC2 CC6.1, PCI-DSS Requirement 10, CIS Kubernetes Benchmark 5.6.1) require monitoring and logging of all interactive access to production systems. Without shell detection, organizations cannot demonstrate compliance with access monitoring controls.
+
+**Falco detects this** by monitoring `execve` syscalls inside containers for known shell binaries (`bash`, `sh`, `zsh`, `ksh`, `csh`, `fish`, `dash`) that are connected to an interactive terminal (`proc.tty != 0`), firing a `WARNING` alert that enables security teams to investigate and respond immediately.
+
+
 ## Falco Rule Manifest
 ```yaml
 apiVersion: v1

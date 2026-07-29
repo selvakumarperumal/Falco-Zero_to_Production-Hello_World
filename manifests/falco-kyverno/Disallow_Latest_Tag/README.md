@@ -9,6 +9,11 @@
 ## Description
 Ensures all container deployments use explicit, versioned image tags instead of the mutable `:latest` tag to guarantee deployment reproducibility, auditing, and supply chain security. Automatically flags or blocks `:latest` images at admission time and generates runtime alerts upon container initialization.
 
+### 🛡️ Problem Statement — What Are We Preventing?
+
+The `:latest` tag is a mutable pointer that can change at any time, making deployments non-reproducible, unauditable, and vulnerable to supply chain attacks. See the detailed explanation in [Why the :latest Tag is Dangerous in Production](#why-the-latest-tag-is-dangerous-in-production) below.
+
+
 ---
 
 ## Why the `:latest` Tag is Dangerous in Production

@@ -9,6 +9,11 @@
 ## Description
 Blocks the configuration of `hostPath` volumes in Kubernetes pods and workload controllers. HostPath volumes grant containers direct access to the underlying host node filesystem, bypassing container sandbox boundaries. Automatically generates controller rules via Kyverno `autogen` and monitors runtime access to critical host files using Falco.
 
+### 🛡️ Problem Statement — What Are We Preventing?
+
+HostPath volumes allow containers to directly access the host node's filesystem — bypassing all container sandbox protections. This enables container escape, credential theft, and full host compromise. See the detailed explanation in [What is a HostPath Volume & Why is it Dangerous?](#what-is-a-hostpath-volume--why-is-it-dangerous) below.
+
+
 ---
 
 ## What is a HostPath Volume & Why is it Dangerous?

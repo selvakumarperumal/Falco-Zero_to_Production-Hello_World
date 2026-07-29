@@ -9,6 +9,18 @@
 ## Description
 Automatically adds Pod Security Standard labels (`pod-security.kubernetes.io/enforce: baseline`) to newly created namespaces. This enforces a baseline level of pod security at the namespace level by default.
 
+### 🛡️ Problem Statement — What Are We Preventing?
+
+By default, newly created Kubernetes namespaces have **no Pod Security Standards enforcement**. This means any pod — including those running as root, using privileged mode, or sharing host namespaces — can be deployed without restriction. This is a critical security gap:
+
+* **Unrestricted Workloads**: Without PSS labels, an attacker who gains access to deploy pods in a namespace can run privileged containers, mount host filesystems, or escalate privileges with zero resistance from the Kubernetes admission layer.
+* **Human Error**: Developers may create new namespaces for testing or feature work and forget to manually apply security labels, leaving production-adjacent environments wide open.
+* **Compliance Drift**: Organizations requiring baseline or restricted pod security profiles (e.g., for CIS Kubernetes Benchmark, SOC2, or PCI-DSS compliance) cannot guarantee consistent enforcement unless every namespace is automatically labeled.
+* **Lateral Movement**: In a multi-tenant cluster, an unlabeled namespace becomes a landing zone where compromised workloads from other namespaces can be redeployed without the security controls that exist elsewhere.
+
+**Kyverno prevents this** by automatically mutating every newly created namespace to include `pod-security.kubernetes.io/enforce: baseline` and `pod-security.kubernetes.io/warn: restricted` labels, ensuring that Kubernetes' built-in Pod Security Admission controller enforces security standards from the moment a namespace is created — without any manual intervention.
+
+
 ## Kyverno Policy Manifest
 ```yaml
 apiVersion: policies.kyverno.io/v1

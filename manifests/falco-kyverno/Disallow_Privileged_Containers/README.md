@@ -9,6 +9,19 @@
 ## Description
 Prevents deploying containers with full host root level access (`privileged: true`). Tracks and alerts if a privileged container gets spawned.
 
+### 🛡️ Problem Statement — What Are We Preventing?
+
+Setting `privileged: true` in a container's `securityContext` disables virtually all Linux kernel-level isolation mechanisms — the container runs with the same access as processes running directly on the host node. This is the single most dangerous security misconfiguration in Kubernetes:
+
+* **Full Host Access (MITRE ATT&CK: T1611 — Escape to Host)**: A privileged container can access all devices on the host (`/dev`), mount the host filesystem, load kernel modules, and modify kernel parameters via `/proc/sys`. An attacker inside a privileged container can trivially escape to the host node by mounting the host root filesystem and adding SSH keys, cron jobs, or modifying system binaries.
+* **Container Escape in One Command**: With privileged mode, escaping the container requires only `nsenter --target 1 --mount --uts --ipc --net --pid` to enter the host's namespaces. This makes privileged containers the easiest and most commonly exploited container escape vector.
+* **cgroup and Seccomp Bypass**: Privileged mode disables cgroup resource constraints and seccomp syscall filtering, allowing the container to make any syscall and consume any amount of resources. This defeats all kernel-level sandboxing protections.
+* **Network Stack Manipulation**: A privileged container can modify the host's network interfaces, routing tables, and iptables rules — enabling network sniffing, ARP spoofing, and man-in-the-middle attacks against other pods on the same node.
+* **Compliance Failure**: Running privileged containers violates the Kubernetes Pod Security Standards (Baseline and Restricted profiles), CIS Kubernetes Benchmark controls, and is explicitly flagged by container security scanners like Trivy, Kubeaudit, and OPA/Gatekeeper.
+
+**Kyverno prevents this** by validating that no container (including init and ephemeral containers) in a pod spec has `privileged: true` set in its `securityContext`, blocking creation at admission time. **Falco detects** any privileged container that bypasses admission controls and starts at runtime, firing a `CRITICAL` alert.
+
+
 ## Kyverno Policy Manifest
 ```yaml
 apiVersion: policies.kyverno.io/v1

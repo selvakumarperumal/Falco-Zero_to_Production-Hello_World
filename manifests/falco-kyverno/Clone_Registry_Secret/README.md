@@ -11,9 +11,18 @@ When running private container registries (ECR, GCR, GHCR), every namespace need
 
 With `synchronize.enabled: true`, any updates to the source secret (e.g., rotated credentials) are automatically propagated to all cloned copies.
 
-> **CEL Functions Used:**
-> - `resource.Get(apiVersion, resourcePlural, namespace, name)` — Fetches a single source resource.
-> - `generator.Apply(targetNamespace, [resources])` — Creates/updates resources in the target namespace.
+### 🛡️ Problem Statement — What Are We Preventing?
+
+In organizations using private container registries, every Kubernetes namespace must have an `imagePullSecret` configured for pods to pull images. Without automated secret distribution, several critical problems arise:
+
+* **ImagePullBackOff Failures**: When a developer creates a new namespace and deploys a workload, the pods fail immediately with `ImagePullBackOff` errors because no registry credential exists in that namespace. This causes deployment delays and frustration, especially during incident response when new namespaces are created urgently.
+* **Manual Secret Sprawl**: Cluster administrators must manually run `kubectl create secret` in every new namespace. In clusters with dozens or hundreds of namespaces, this is tedious, error-prone, and creates opportunities for mistyped credentials or forgotten namespaces.
+* **Stale Credentials After Rotation**: When registry credentials are rotated (a mandatory security practice, especially for short-lived tokens like AWS ECR auth tokens), administrators must manually update the secret in every namespace. Missing even one namespace causes silent deployment failures when pods are rescheduled.
+* **Security Inconsistency**: Without a centralized mechanism, different namespaces may end up with different credentials — some current, some expired, and some with overly broad permissions — creating an inconsistent security posture that is difficult to audit.
+* **Multi-Tenant Risk**: In multi-tenant clusters, failing to provision image pull secrets for a tenant namespace can block their entire deployment pipeline or force them to use public images, which introduces supply chain risks.
+
+**Kyverno prevents this** by automatically cloning the source registry secret into every newly created namespace and keeping all copies synchronized with the source. When credentials are rotated in the source, all downstream clones are automatically updated — zero manual intervention required.
+
 
 ---
 
