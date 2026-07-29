@@ -112,28 +112,74 @@ spec:
 
 ---
 
+## Test Scenarios & Manifest Examples
+
+### 1. ✅ MUTATED CASE — Pod WITH Injection Annotation
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-app-with-sidecar
+  namespace: default
+  annotations:
+    sidecar.kyverno.io/inject: "true"
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+```
+* **Result**: **MUTATED** — `matchConditions` evaluates to `true`. Kyverno executes `JSONPatch` appending `log-sidecar` (`fluent/fluent-bit:3.2`) to `spec.containers`.
+
+---
+
+### 2. 🛡️ UNMUTATED CASE — Pod WITHOUT Injection Annotation
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-app-no-annotation
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+```
+* **Result**: **UNMUTATED** — `matchConditions` evaluates to `false` (`sidecar.kyverno.io/inject` annotation is missing). The pod specification remains untouched.
+
+---
+
 ## How to Test
 
-### 1. Create a Pod WITH the Annotation
+### Kyverno (Admission Control Dry-Run Check)
 ```bash
-kubectl run test-sidecar --image=nginx:1.25 --restart=Never \
-  --annotations='sidecar.kyverno.io/inject=true'
+# 1. Test annotated pod (should receive log-sidecar)
+kubectl apply -f - --dry-run=server -o jsonpath='{.spec.containers[*].name}' <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-sidecar
+  namespace: default
+  annotations:
+    sidecar.kyverno.io/inject: "true"
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+EOF
+# Expected Output: app log-sidecar
+
+# 2. Test unannotated pod (should remain single container)
+kubectl apply -f - --dry-run=server -o jsonpath='{.spec.containers[*].name}' <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-no-sidecar
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+EOF
+# Expected Output: app
 ```
 
-### 2. Verify Sidecar Was Injected
-```bash
-kubectl get pod test-sidecar -o jsonpath='{.spec.containers[*].name}'
-# Expected: nginx log-sidecar
-```
-
-### 3. Create a Pod WITHOUT the Annotation (Should Not Be Mutated)
-```bash
-kubectl run test-no-sidecar --image=nginx:1.25 --restart=Never
-kubectl get pod test-no-sidecar -o jsonpath='{.spec.containers[*].name}'
-# Expected: nginx (no sidecar)
-```
-
-### 4. Clean Up
-```bash
-kubectl delete pod test-sidecar test-no-sidecar
-```

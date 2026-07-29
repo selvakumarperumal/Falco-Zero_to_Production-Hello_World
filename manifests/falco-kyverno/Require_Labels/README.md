@@ -58,13 +58,104 @@ The validation enforces standard labelling requirements:
 - **`validate.pattern.metadata.labels`**:
   - `app.kubernetes.io/name: "?*"`: Evaluates labels. The `?*` pattern means the label must be present and contain at least one character.
 
+## Test Scenarios & Manifest Examples
+
+### 1. ✅ PASS Case — Pod Specifying Required `app.kubernetes.io/name` Label
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pass-labeled-pod
+  namespace: default
+  labels:
+    app.kubernetes.io/name: payment-service
+```
+* **Result**: **PASS** — `has(metadata.labels)` evaluates `true`, `'app.kubernetes.io/name' in labels` evaluates `true`, and value is non-empty.
+
+---
+
+### 2. ❌ FAIL Case 1 — Pod Missing `metadata.labels` Block Entirely
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-no-labels
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+```
+* **Result**: **FAIL** — `has(object.metadata.labels)` evaluates `false`.
+
+---
+
+### 3. ❌ FAIL Case 2 — Pod Has Labels, But Missing `app.kubernetes.io/name`
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-wrong-label
+  namespace: default
+  labels:
+    tier: frontend
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+```
+* **Result**: **FAIL** — `'app.kubernetes.io/name' in object.metadata.labels` evaluates `false`.
+
+---
+
+### 4. ❌ FAIL Case 3 — Empty Label Value (`app.kubernetes.io/name: ""`)
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-empty-label
+  namespace: default
+  labels:
+    app.kubernetes.io/name: ""
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+```
+* **Result**: **FAIL** — `object.metadata.labels['app.kubernetes.io/name'] != ''` evaluates `false`.
+
+---
+
 ## How to Test
-1. Deploy a pod lacking the standard label (this triggers a warning/audit log from Kyverno):
+
+### Kyverno (Admission Control Dry-Run Check)
 ```bash
-kubectl run test-no-label --image=nginx --restart=Never
+# 1. Test PASS case (properly labeled pod)
+kubectl apply -f - --dry-run=server <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pass-labeled
+  namespace: default
+  labels:
+    app.kubernetes.io/name: my-app
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+EOF
+
+# 2. Test FAIL case (unlabeled pod)
+kubectl apply -f - --dry-run=server <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-unlabeled
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+EOF
 ```
-2. Review audit warnings or namespace PolicyReports to verify the policy violation is recorded.
-3. Clean up:
-```bash
-kubectl delete pod test-no-label
-```
+

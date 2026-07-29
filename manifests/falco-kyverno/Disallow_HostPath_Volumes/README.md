@@ -151,36 +151,129 @@ The companion Falco rule detects unauthorized host path access at runtime:
 
 ---
 
-## How to Test
+## Test Scenarios & Manifest Examples
 
-### Kyverno (Admission Check)
-Try to deploy a pod or deployment mounting a `hostPath` volume (it should be rejected immediately by admission control):
-
-```bash
-kubectl apply -f - <<EOF
+### 1. ✅ PASS Case — Standard `emptyDir` Volume
+```yaml
 apiVersion: v1
 kind: Pod
 metadata:
-  name: test-hostpath
+  name: test-pass-emptydir
+  namespace: default
 spec:
   containers:
-  - name: nginx
-    image: nginx
-    volumeMounts:
-    - mountPath: /host
-      name: host-vol
+    - name: app
+      image: nginx:1.25
+      volumeMounts:
+        - mountPath: /tmp/cache
+          name: cache-vol
   volumes:
-  - name: host-vol
-    hostPath:
-      path: /
+    - name: cache-vol
+      emptyDir: {}
+```
+* **Result**: **PASS** — Volume specifies `emptyDir`, so `has(v.hostPath)` evaluates to `false`.
+
+---
+
+### 2. ❌ FAIL Case — Direct `hostPath` Mount on Pod
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-hostpath-pod
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+      volumeMounts:
+        - mountPath: /host-etc
+          name: host-vol
+  volumes:
+    - name: host-vol
+      hostPath:
+        path: /etc
+```
+* **Result**: **FAIL** — `object.spec.volumes.exists(v, has(v.hostPath))` evaluates to `true`, violating the policy rule.
+
+---
+
+### 3. ❌ FAIL Case — `hostPath` Mount in Deployment Template (Caught by Autogen)
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-fail-hostpath-deploy
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bad-hostpath
+  template:
+    metadata:
+      labels:
+        app: bad-hostpath
+    spec:
+      containers:
+        - name: app
+          image: nginx:1.25
+          volumeMounts:
+            - mountPath: /host-root
+              name: root-vol
+      volumes:
+        - name: root-vol
+          hostPath:
+            path: /
+```
+* **Result**: **FAIL** — The `autogen.podControllers` block generates rules covering `Deployments`, rejecting creation at admission time.
+
+---
+
+## How to Test
+
+### Kyverno (Admission Control Dry-Run Check)
+```bash
+# 1. Test PASS case (should succeed)
+kubectl apply -f - --dry-run=server <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pass-emptydir
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+      volumeMounts:
+        - mountPath: /tmp/cache
+          name: cache-vol
+  volumes:
+    - name: cache-vol
+      emptyDir: {}
+EOF
+
+# 2. Test FAIL case (should be blocked)
+kubectl apply -f - --dry-run=server <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-hostpath-pod
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+      volumeMounts:
+        - mountPath: /host-etc
+          name: host-vol
+  volumes:
+    - name: host-vol
+      hostPath:
+        path: /etc
 EOF
 ```
 
-*Expected Result:*
-```text
-Error from server (Forbidden): admission webhook "vpol.validate.kyverno.svc-fail" denied the request:
-Policy disallow-hostpath-volumes failed: HostPath volumes are not allowed.
-```
+### Falco (Runtime Access Check)
+If admission control is in `Audit` mode or bypassed, accessing system critical paths like `/etc/shadow` from a container will generate a `CRITICAL` alert in Falco: `Sensitive Host Path Accessed from Container`.
 
-### Falco (Runtime Check)
-If admission control is set to `Audit` mode or bypassed, accessing system critical paths like `/etc/shadow` from a container will generate a `CRITICAL` alert in Falco: `Sensitive Host Path Accessed from Container`.

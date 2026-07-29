@@ -60,17 +60,46 @@ This is a detection-only control monitoring user session spawn:
 - **`proc.tty != 0`**: Ensures the shell is linked to an interactive terminal session (e.g. `kubectl exec -it`). This helps differentiate an interactive session from script/system processes running non-interactively (which have TTY = 0).
 - **`not k8s.ns.name in (kube-system, kyverno)`**: Exempts system namespaces to avoid alerts on cluster administration operations.
 
+## Test Scenarios & Manifest Examples
+
+### 1. 🚨 RUNTIME ALERT CASE — Interactive Terminal Exec (`kubectl exec -it`)
+```bash
+# Executing an interactive TTY session inside a running pod
+kubectl exec -it test-shell-pod -- /bin/sh
+```
+* **Result**: **ALERT (WARNING)** — Process `sh` spawned with `proc.tty != 0` (allocated pseudo-TTY). Falco logs `Interactive Shell Spawned in Container`.
+
+---
+
+### 2. 🛡️ NON-ALERT CASE — Non-Interactive Command Execution (`proc.tty == 0`)
+```bash
+# Executing a single non-interactive command without TTY allocation
+kubectl exec test-shell-pod -- hostname
+```
+* **Result**: **NO ALERT** — Command runs without pseudo-TTY allocation (`proc.tty == 0`), so the condition `proc.tty != 0` evaluates to `false`.
+
+---
+
 ## How to Test
-1. Run any simple container:
+
+### Falco (Runtime Shell Detection Check)
+1. Run a test application pod:
 ```bash
-kubectl run test-shell --image=nginx --restart=Never
+kubectl run test-shell-app --image=nginx:1.25 --restart=Never
 ```
-2. Execute an interactive shell session into the running pod:
+
+2. Execute an interactive shell session:
 ```bash
-kubectl exec -it test-shell -- sh
+kubectl exec -it test-shell-app -- sh
 ```
-3. Run a couple of quick commands in the shell, exit, and verify that Falco logs: `Interactive Shell Spawned in Container`.
+
+3. Check Falco alerts for: `Interactive Shell Spawned in Container`:
+```bash
+kubectl logs -n falco -l app.kubernetes.io/name=falco | grep "Interactive Shell Spawned"
+```
+
 4. Clean up:
 ```bash
-kubectl delete pod test-shell
+kubectl delete pod test-shell-app --ignore-not-found
 ```
+

@@ -104,12 +104,87 @@ The policy limits approved image sources:
 The companion Falco rule checks the image tag metadata:
 - **`not container.image.repository contains ...`**: Checks the running container's metadata registry string. If it is from an unapproved registry, it triggers an `ERROR` level alert.
 
+## Test Scenarios & Manifest Examples
+
+### 1. ✅ PASS Case 1 — GitHub Container Registry (`ghcr.io`)
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pass-ghcr
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: ghcr.io/my-org/my-app:v1.0.0
+```
+* **Result**: **PASS** — `c.image.startsWith('ghcr.io/')` evaluates `true`.
+
+---
+
+### 2. ✅ PASS Case 2 — Official Docker Hub Image (`!c.image.contains('/')`)
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pass-library-image
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+```
+* **Result**: **PASS** — `!c.image.contains('/')` evaluates `true` for standard library images (e.g. `nginx:1.25`).
+
+---
+
+### 3. ❌ FAIL Case — Unapproved Registry (`quay.io`)
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-untrusted-registry
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: quay.io/sysdig/falco:latest
+```
+* **Result**: **FAIL** — `quay.io` domain does not match any allowed prefix in the policy expression.
+
+---
+
 ## How to Test
-### Kyverno (Admission Check)
-Try to run a container from an unapproved registry (should be blocked):
+
+### Kyverno (Admission Control Dry-Run Check)
 ```bash
-kubectl run test-untrusted-reg --image=quay.io/sysdig/falco --restart=Never
+# 1. Test PASS case (approved ghcr.io registry)
+kubectl apply -f - --dry-run=server <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pass-ghcr
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: ghcr.io/org/app:1.0
+EOF
+
+# 2. Test FAIL case (unapproved quay.io registry)
+kubectl apply -f - --dry-run=server <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-quay
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: quay.io/sysdig/falco:latest
+EOF
 ```
 
-### Falco (Runtime Check)
-Spawn a container from an untrusted registry (in audit mode/unblocked namespace) and check for: `Container from Untrusted Registry`.
+### Falco (Runtime Registry Check)
+If admission control is in Audit mode, running a container from an untrusted registry like `quay.io` triggers Falco error alert: `Container from Untrusted Registry`.
+

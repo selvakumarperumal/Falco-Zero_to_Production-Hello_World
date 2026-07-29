@@ -111,24 +111,57 @@ rules:
 ```
 
 
+## Test Scenarios & Manifest Examples
+
+### 1. ✅ TRIGGER RESOURCE — New Namespace Creation
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: test-prod-app
+```
+* **Result**: **GENERATED & SYNCED** — Triggered on namespace `CREATE`. Kyverno evaluates `resource.Get("v1", "secrets", "default", "regcred")` and invokes `generator.Apply("test-prod-app", [sourceSecret])` to replicate `regcred` into `test-prod-app`.
+
+---
+
+### 2. 🔄 SYNCHRONIZATION EVENT — Source Secret Credential Rotation
+```bash
+# Updating password in default/regcred automatically updates test-prod-app/regcred
+kubectl create secret docker-registry regcred \
+  --docker-server=ghcr.io \
+  --docker-username=rotated-user \
+  --docker-password=new-token-value \
+  -n default --dry-run=client -o yaml | kubectl apply -f -
+```
+* **Result**: **PROPAGATED** — Kyverno's background controller detects modification to `default/regcred` and synchronizes the payload across all cloned instances.
+
+---
+
 ## How to Test
 
-### 1. Apply the Policy
+### 1. Setup Source Secret
 ```bash
-kubectl apply -f kyverno.yaml
+# Create dummy regcred secret in default namespace
+kubectl create secret docker-registry regcred \
+  --docker-server=ghcr.io \
+  --docker-username=my-user \
+  --docker-password=my-password \
+  -n default
 ```
 
-### 2. Create a New Namespace
+### 2. Create Target Namespace
 ```bash
-kubectl create namespace test-clone
+kubectl create namespace test-clone-ns
 ```
 
-### 3. Verify the Secret Was Cloned
+### 3. Verify Generated Secret
 ```bash
-kubectl get secret regcred -n test-clone
+kubectl get secret regcred -n test-clone-ns
 ```
 
 ### 4. Clean Up
 ```bash
-kubectl delete namespace test-clone
+kubectl delete namespace test-clone-ns
+kubectl delete secret regcred -n default
 ```
+

@@ -100,31 +100,101 @@ The runtime check detects usage of privilege escalation mechanisms:
 - **`proc.name in (sudo, su, newgrp, chsh, chfn, passwd, pkexec)`**: Checks if the spawned process matches known setuid/setgid binary commands.
 - **`not k8s.ns.name in (kube-system)`**: Ignores system tasks operating inside `kube-system` to limit alerts to application namespaces.
 
-## How to Test
-### Kyverno (Admission Check)
-Deploy a pod explicitly enabling privilege escalation (should be blocked):
-```bash
-kubectl apply -f - <<EOF
+## Test Scenarios & Manifest Examples
+
+### 1. ✅ PASS Case — Explicitly Disallows Privilege Escalation (`allowPrivilegeEscalation: false`)
+```yaml
 apiVersion: v1
 kind: Pod
 metadata:
-  name: test-priv-esc
+  name: test-pass-no-priv-esc
+  namespace: default
 spec:
   containers:
-  - name: nginx
-    image: nginx
-    securityContext:
-      allowPrivilegeEscalation: true
+    - name: app
+      image: nginx:1.25
+      securityContext:
+        allowPrivilegeEscalation: false
+```
+* **Result**: **PASS** — `c.securityContext.allowPrivilegeEscalation == false` evaluates to `true`.
+
+---
+
+### 2. ❌ FAIL Case 1 — `allowPrivilegeEscalation: true`
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-priv-esc-true
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+      securityContext:
+        allowPrivilegeEscalation: true
+```
+* **Result**: **FAIL** — `c.securityContext.allowPrivilegeEscalation == false` evaluates to `false`.
+
+---
+
+### 3. ❌ FAIL Case 2 — `allowPrivilegeEscalation` Field Omitted
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-omitted-priv-esc
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+```
+* **Result**: **FAIL** — `has(c.securityContext.allowPrivilegeEscalation)` evaluates to `false`. The policy requires explicit setting to `false`.
+
+---
+
+## How to Test
+
+### Kyverno (Admission Control Dry-Run Check)
+```bash
+# 1. Test PASS case (explicitly false)
+kubectl apply -f - --dry-run=server <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pass-no-priv-esc
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+      securityContext:
+        allowPrivilegeEscalation: false
+EOF
+
+# 2. Test FAIL case (omitted field)
+kubectl apply -f - --dry-run=server <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-omitted
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
 EOF
 ```
 
-### Falco (Runtime Check)
-1. Run a container and try executing a setuid/setgid binary such as `su`:
+### Falco (Runtime Execution Check)
+1. Run a container and execute a setuid binary (`su`):
 ```bash
 kubectl run test-su --image=alpine --restart=Never -it -- su
 ```
-2. Check Falco alerts for: `Setuid or Setgid Binary Executed in Container`.
+2. Verify Falco triggers alert: `Setuid or Setgid Binary Executed in Container`.
 3. Clean up:
 ```bash
-kubectl delete pod test-su
+kubectl delete pod test-su --ignore-not-found
 ```
+

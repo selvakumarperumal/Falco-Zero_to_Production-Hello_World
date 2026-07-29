@@ -94,27 +94,137 @@ Deployment my-api has 1 replica(s). Minimum 2 required for HA in production.
 
 ---
 
+## Test Scenarios & Manifest Examples
+
+### 1. ✅ PASS Case 1 — Production Deployment with HA Replicas (`replicas: 2`)
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-ha-deployment
+  namespace: prod-ns
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+        - name: app
+          image: nginx:1.25
+```
+* **Result**: **PASS** — Target namespace has label `environment: production` (`matchConditions` evaluates `true`). `object.spec.replicas >= 2` evaluates `true`.
+
+---
+
+### 2. ❌ FAIL Case — Production Deployment with Single Replica (`replicas: 1`)
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-single-replica-prod
+  namespace: prod-ns
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+        - name: app
+          image: nginx:1.25
+```
+* **Result**: **FAIL** — Denied with dynamic message: `"Deployment test-single-replica-prod has 1 replica(s). Minimum 2 required for HA in production."`
+
+---
+
+### 3. 🛡️ EXEMPT CASE — Staging Namespace (`environment: staging`)
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-single-replica-staging
+  namespace: staging-ns
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+        - name: app
+          image: nginx:1.25
+```
+* **Result**: **PASS (EXEMPT)** — `matchConditions` evaluates `false` because `namespaceObject.metadata.labels['environment'] != 'production'`. Single-replica deployments are permitted in non-production environments.
+
+---
+
 ## How to Test
 
-### 1. Create a Production Namespace
+### Kyverno (Admission Control Dry-Run Check)
 ```bash
-kubectl create namespace prod-test
-kubectl label namespace prod-test environment=production
+# 1. Setup labeled test namespaces
+kubectl create namespace prod-test --dry-run=client -o yaml | kubectl apply -f -
+kubectl label namespace prod-test environment=production --overwrite
+
+kubectl create namespace staging-test --dry-run=client -o yaml | kubectl apply -f -
+kubectl label namespace staging-test environment=staging --overwrite
+
+# 2. Test FAIL case in production namespace (should be denied)
+kubectl apply -f - -n prod-test --dry-run=server <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-single
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+        - name: app
+          image: nginx:1.25
+EOF
+
+# 3. Test PASS case in production namespace (2 replicas)
+kubectl apply -f - -n prod-test --dry-run=server <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-ha
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+        - name: app
+          image: nginx:1.25
+EOF
+
+# 4. Clean up test namespaces
+kubectl delete namespace prod-test staging-test --ignore-not-found
 ```
 
-### 2. Try Creating a Single-Replica Deployment (Should Fail)
-```bash
-kubectl create deployment test-single --image=nginx:1.25 --replicas=1 -n prod-test
-# Expected: Denied — "Deployment test-single has 1 replica(s)..."
-```
-
-### 3. Create a Multi-Replica Deployment (Should Succeed)
-```bash
-kubectl create deployment test-ha --image=nginx:1.25 --replicas=2 -n prod-test
-# Expected: deployment.apps/test-ha created
-```
-
-### 4. Clean Up
-```bash
-kubectl delete namespace prod-test
-```

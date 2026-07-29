@@ -67,13 +67,50 @@ The rule monitors syscalls requesting read access to key files:
 - **`fd.name endswith ".pem"` or `.key` or `.p12` or `.pfx` or contains `id_rsa`, `id_ed25519`**: Watches private key extensions.
 - **`not proc.name in (sshd, ssh-agent)`**: Exempts SSH demons/agents which have a legitimate need to read keys.
 
+## Test Scenarios & Manifest Examples
+
+### 1. 🚨 RUNTIME ALERT CASE 1 — Reading `/etc/shadow`
+```bash
+# Attempting to read system password hashes
+kubectl run test-shadow-read --image=alpine --restart=Never -it -- cat /etc/shadow
+```
+* **Result**: **ALERT (ERROR)** — `fd.name in (/etc/shadow, ...)` and `evt.is_open_read = true`. Falco emits `Sensitive File Read in Container`.
+
+---
+
+### 2. 🚨 RUNTIME ALERT CASE 2 — Reading Private Key (`.pem` / `.key`)
+```bash
+# Attempting to read a private key file
+kubectl run test-key-read --image=alpine --restart=Never -- sh -c "touch /tmp/private.pem && cat /tmp/private.pem"
+```
+* **Result**: **ALERT (ERROR)** — `fd.name endswith ".pem"` matches rule condition.
+
+---
+
+### 3. 🛡️ EXEMPT CASE — Legitimate SSH Daemon Operation
+```bash
+# Process name sshd reading SSH key files
+# proc.name in (sshd, ssh-agent)
+```
+* **Result**: **NO ALERT** — Excluded by `not proc.name in (sshd, ssh-agent)`.
+
+---
+
 ## How to Test
-1. Spawn a container and read `/etc/shadow` (should trigger an alert):
+
+### Falco (Runtime Credential Read Check)
+1. Spawn a test container reading `/etc/shadow`:
 ```bash
 kubectl run test-shadow-read --image=alpine --restart=Never -it -- cat /etc/shadow
 ```
-2. Check Falco alerts for: `Sensitive File Read in Container`.
+
+2. Check Falco alerts for error alert:
+```bash
+kubectl logs -n falco -l app.kubernetes.io/name=falco | grep "Sensitive file read in container"
+```
+
 3. Clean up:
 ```bash
-kubectl delete pod test-shadow-read
+kubectl delete pod test-shadow-read test-key-read --ignore-not-found
 ```
+

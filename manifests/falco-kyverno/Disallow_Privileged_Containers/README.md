@@ -90,12 +90,116 @@ The runtime rule acts as a core security check:
 - **`container_started and container`**: Listens for runtime container initialization.
 - **`container.privileged = true`**: Assesses container status from container runtime metadata. If the container was somehow started with privileged flags enabled, Falco triggers a `CRITICAL` alert.
 
+## Test Scenarios & Manifest Examples
+
+### 1. ✅ PASS Case 1 — `privileged: false` Explicitly Set
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pass-unprivileged
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+      securityContext:
+        privileged: false
+```
+* **Result**: **PASS** — `c.securityContext.privileged == true` evaluates to `false`.
+
+---
+
+### 2. ✅ PASS Case 2 — `privileged` Field Omitted (Defaults to False)
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pass-default-unprivileged
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+```
+* **Result**: **PASS** — `has(c.securityContext.privileged)` evaluates to `false`, allowing the pod.
+
+---
+
+### 3. ❌ FAIL Case 1 — Main Container Sets `privileged: true`
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-priv-main
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+      securityContext:
+        privileged: true
+```
+* **Result**: **FAIL** — `c.securityContext.privileged == true` evaluates to `true`, blocking creation.
+
+---
+
+### 4. ❌ FAIL Case 2 — Init Container Sets `privileged: true`
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-priv-init
+  namespace: default
+spec:
+  initContainers:
+    - name: setup
+      image: busybox:1.36
+      securityContext:
+        privileged: true
+  containers:
+    - name: app
+      image: nginx:1.25
+```
+* **Result**: **FAIL** — `!object.spec.?initContainers...exists(c, c.securityContext.privileged == true)` catches the init container.
+
+---
+
 ## How to Test
-### Kyverno (Admission Check)
-Deploy a container with privileged mode (should be blocked):
+
+### Kyverno (Admission Control Dry-Run Check)
 ```bash
-kubectl run test-priv --image=nginx --restart=Never --overrides='{"spec":{"containers":[{"name":"test-priv","image":"nginx","securityContext":{"privileged":true}}]}}'
+# 1. Test PASS case (unprivileged pod should succeed)
+kubectl apply -f - --dry-run=server <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pass-unprivileged
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+      securityContext:
+        privileged: false
+EOF
+
+# 2. Test FAIL case (privileged pod should be blocked)
+kubectl apply -f - --dry-run=server <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-priv
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+      securityContext:
+        privileged: true
+EOF
 ```
 
 ### Falco (Runtime Check)
 If admission control is bypassed or in audit mode, verify Falco triggers: `Privileged Container Started`.
+

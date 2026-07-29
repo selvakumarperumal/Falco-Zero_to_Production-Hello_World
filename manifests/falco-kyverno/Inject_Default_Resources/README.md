@@ -160,28 +160,60 @@ spec:
 
 ---
 
+## Test Scenarios & Manifest Examples
+
+### 1. ✅ MUTATED CASE — Pod Missing Resource Requests
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-no-requests
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+```
+* **Result**: **MUTATED** — Kyverno detects missing `requests` and injects `cpu: 100m`, `memory: 128Mi`.
+
+---
+
+### 2. ✅ UNMUTATED CASE — Pod Explicitly Specifies Custom Requests
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-custom-requests
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+      resources:
+        requests:
+          cpu: 500m
+          memory: 512Mi
+```
+* **Result**: **PRESERVED** — Existing `requests` values (`cpu: 500m`, `memory: 512Mi`) are preserved without modification.
+
+---
+
 ## How to Test
 
-### 1. Kyverno (Admission Mutation Check)
-Deploy a pod **without** resource requests:
-
+### Kyverno (Admission Mutation Dry-Run Check)
 ```bash
-kubectl apply -f - <<EOF
+# Test mutation via server dry-run and view injected resource requests
+kubectl apply -f - --dry-run=server -o yaml <<EOF | grep -A 4 requests
 apiVersion: v1
 kind: Pod
 metadata:
   name: test-mutation-resources
+  namespace: default
 spec:
   containers:
-  - name: nginx
-    image: nginx
+    - name: app
+      image: nginx:1.25
 EOF
-```
-
-Verify that Kyverno automatically mutated the pod spec to inject baseline resource requests:
-
-```bash
-kubectl get pod test-mutation-resources -o yaml | grep -A 4 requests
 ```
 
 *Expected Output:*
@@ -191,10 +223,6 @@ kubectl get pod test-mutation-resources -o yaml | grep -A 4 requests
       memory: 128Mi
 ```
 
-Clean up test pod:
-```bash
-kubectl delete pod test-mutation-resources
-```
-
-### 2. Falco (Runtime Check)
+### Falco (Runtime Check)
 Inspect alerts routed via Falcosidekick when unconstrained containers run in monitored namespaces.
+

@@ -95,14 +95,103 @@ The companion Falco rule detects compute stress tools running inside containers:
 - **`proc.name in (stress, stress-ng, yes, dd)`**: Listens for process execution of known benchmarking or disk write utilities.
 - **`not k8s.ns.name in (kube-system)`**: Exempts system namespaces to allow standard cluster-level benchmarking.
 
+## Test Scenarios & Manifest Examples
+
+### 1. ✅ PASS Case — Both CPU and Memory Limits Specified
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pass-limits
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+      resources:
+        limits:
+          cpu: "500m"
+          memory: "512Mi"
+```
+* **Result**: **PASS** — Both `has(limits.cpu)` and `has(limits.memory)` evaluate `true`.
+
+---
+
+### 2. ❌ FAIL Case 1 — Missing CPU Limit (`memory` only)
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-no-cpu-limit
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+      resources:
+        limits:
+          memory: "512Mi"
+```
+* **Result**: **FAIL** — `has(limits.cpu)` evaluates `false`.
+
+---
+
+### 3. ❌ FAIL Case 2 — Requests Specified, Limits Omitted
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-requests-only
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+      resources:
+        requests:
+          cpu: "100m"
+          memory: "128Mi"
+```
+* **Result**: **FAIL** — `has(c.resources.limits)` evaluates `false`.
+
+---
+
 ## How to Test
-### Kyverno (Admission Check)
-Try to create a pod without specifying resource limits (should be blocked):
+
+### Kyverno (Admission Control Dry-Run Check)
 ```bash
-kubectl run test-no-limits --image=nginx --restart=Never
+# 1. Test PASS case (both CPU and memory limits present)
+kubectl apply -f - --dry-run=server <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pass-limits
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+      resources:
+        limits:
+          cpu: "500m"
+          memory: "512Mi"
+EOF
+
+# 2. Test FAIL case (no limits specified)
+kubectl apply -f - --dry-run=server <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-no-limits
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+EOF
 ```
 
-### Falco (Runtime Check)
+### Falco (Runtime Resource Stress Check)
 1. Launch a container executing the `yes` tool:
 ```bash
 kubectl run test-exhaustion --image=alpine --restart=Never -it -- yes > /dev/null
@@ -110,5 +199,6 @@ kubectl run test-exhaustion --image=alpine --restart=Never -it -- yes > /dev/nul
 2. Verify Falco logs warning alert: `Container Resource Exhaustion Behavior`.
 3. Clean up:
 ```bash
-kubectl delete pod test-exhaustion
+kubectl delete pod test-exhaustion --ignore-not-found
 ```
+

@@ -112,28 +112,57 @@ The runtime rule detects outbound network traversal:
 - **`fd.typechar = 4`**: Restricts targeting to IPv4 connections.
 - **`not fd.sip in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")`**: Ignores cluster private IP blocks. A connection to any public IP fires a `WARNING` alert indicating potential exfiltration.
 
+## Test Scenarios & Manifest Examples
+
+### 1. ✅ TRIGGER EVENT — New Namespace Creation
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: test-zero-trust-ns
+```
+* **Result**: **GENERATED** — Kyverno automatically generates `NetworkPolicy` named `default-deny-all` in `test-zero-trust-ns`.
+
+---
+
+### 2. 📋 GENERATED RESOURCE SPECIFICATION — `default-deny-all`
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: test-zero-trust-ns
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+```
+* **Result**: **ENFORCED** — All pods in `test-zero-trust-ns` have both ingress and egress blocked by default until explicit allow rules are created.
+
+---
+
 ## How to Test
-### Kyverno (Admission Check)
-1. Create a namespace:
+
+### Kyverno (Generation Check)
+1. Create a new namespace:
 ```bash
 kubectl create namespace test-deny-policy
 ```
-2. Check that the NetworkPolicy is automatically created:
+2. Inspect automatically generated NetworkPolicy:
 ```bash
-kubectl get netpol -n test-deny-policy
-```
-3. Clean up:
-```bash
-kubectl delete namespace test-deny-policy
+kubectl get netpol default-deny-all -n test-deny-policy -o yaml
 ```
 
-### Falco (Runtime Check)
-1. Spin up a container and ping an external server (e.g. 8.8.8.8):
+### Falco (Runtime Outbound Connection Check)
+1. Spin up a container and connect to a public external IP (e.g. 8.8.8.8):
 ```bash
 kubectl run test-outbound-ping --image=alpine --restart=Never -it -- ping -c 1 8.8.8.8
 ```
-2. Check Falco alerts for: `Unexpected Outbound Connection from Container`.
+2. Verify Falco logs warning alert: `Unexpected Outbound Connection from Container`.
 3. Clean up:
 ```bash
-kubectl delete pod test-outbound-ping
+kubectl delete namespace test-deny-policy --ignore-not-found
+kubectl delete pod test-outbound-ping --ignore-not-found
 ```
+

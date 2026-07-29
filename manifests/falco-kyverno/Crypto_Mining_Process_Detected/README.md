@@ -78,13 +78,50 @@ The rule captures runtime cryptocurrency hijacking behavior:
 - **`output`**: Details the command, pod, namespace, image, and executing user.
 - **`priority: CRITICAL`**: Marks it as a critical severity incident, as cryptojacking consumes extensive CPU resources and billings.
 
+## Test Scenarios & Manifest Examples
+
+### 1. 🚨 RUNTIME ALERT CASE 1 — Known Mining Binary Name (`xmrig`)
+```bash
+# Executing a process named xmrig inside a container
+kubectl run test-miner-binary --image=alpine --restart=Never -- sh -c "exec -a xmrig sleep 60"
+```
+* **Result**: **ALERT (CRITICAL)** — `proc.name` matches item in `crypto_mining_processes` list. Falco emits `Crypto Mining Process Detected`.
+
+---
+
+### 2. 🚨 RUNTIME ALERT CASE 2 — Stratum Protocol in Command Line
+```bash
+# Command line arguments specifying a stratum pool URL
+kubectl run test-stratum-cmd --image=alpine --restart=Never -- sh -c "sleep 60 --url=stratum+tcp://pool.supportxmr.com:5555"
+```
+* **Result**: **ALERT (CRITICAL)** — `proc.cmdline` contains `"stratum+tcp://"`. Falco triggers a critical alert.
+
+---
+
+### 3. ✅ NORMAL OPERATION — Standard Application Workload
+```bash
+# Running legitimate application process
+kubectl run test-normal-app --image=nginx:1.25 --restart=Never
+```
+* **Result**: **NO ALERT** — Process name (`nginx`) and command line parameters do not match any miner pattern.
+
+---
+
 ## How to Test
-1. Spin up a temporary pod and execute a command disguised under a miner process name:
+
+### Falco (Runtime Execution Test)
+1. Spin up a temporary pod and simulate a mining execution using `exec -a`:
 ```bash
-kubectl run test-miner --image=alpine --restart=Never -it -- sh -c "sleep 1 && exec -a xmrig sleep 100"
+kubectl run test-miner --image=alpine --restart=Never -it -- sh -c "sleep 1 && exec -a xmrig sleep 10"
 ```
-2. Check your Falco log alerts or port-forward to the Falcosidekick UI to verify a `Crypto Mining Process Detected` critical alert has been fired.
-3. Clean up the pod:
+
+2. Check Falco logs or Falcosidekick UI for critical alert:
 ```bash
-kubectl delete pod test-miner
+kubectl logs -n falco -l app.kubernetes.io/name=falco | grep "Crypto Mining Process Detected"
 ```
+
+3. Clean up:
+```bash
+kubectl delete pod test-miner test-miner-binary test-stratum-cmd test-normal-app --ignore-not-found
+```
+

@@ -88,20 +88,104 @@ The companion Falco rule monitors the active process UID at runtime:
 - **`user.uid = 0`**: Triggers if any process spawns with UID 0 (root).
 - **`not k8s.ns.name in (kube-system, kyverno)`**: Ignores cluster system processes which often require root privileges.
 
+## Test Scenarios & Manifest Examples
+
+### 1. ✅ PASS Case 1 — Pod-Level `runAsNonRoot: true`
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pass-pod-non-root
+  namespace: default
+spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+  containers:
+    - name: app
+      image: nginx:1.25
+```
+* **Result**: **PASS** — `object.spec.securityContext.runAsNonRoot == true` evaluates `true`.
+
+---
+
+### 2. ✅ PASS Case 2 — Container-Level `runAsNonRoot: true`
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pass-container-non-root
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+```
+* **Result**: **PASS** — `c.securityContext.runAsNonRoot == true` for all containers evaluates `true`.
+
+---
+
+### 3. ❌ FAIL Case — Default Execution (Omitted `runAsNonRoot`)
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-root-default
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+```
+* **Result**: **FAIL** — `runAsNonRoot` is not configured at pod or container level.
+
+---
+
 ## How to Test
-### Kyverno (Admission Check)
-Attempt to deploy a standard root-default container (should be blocked):
+
+### Kyverno (Admission Control Dry-Run Check)
 ```bash
-kubectl run test-root-deploy --image=nginx --restart=Never
+# 1. Test PASS case (non-root configuration)
+kubectl apply -f - --dry-run=server <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pass-non-root
+  namespace: default
+spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+  containers:
+    - name: app
+      image: nginx:1.25
+EOF
+
+# 2. Test FAIL case (root default pod)
+kubectl apply -f - --dry-run=server <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-root
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+EOF
 ```
 
-### Falco (Runtime Check)
-1. Spawn a shell running as root:
+### Falco (Runtime Root Process Check)
+1. Spawn a container running as root (UID 0):
 ```bash
 kubectl run test-root-check --image=alpine --restart=Never -it -- id
 ```
-2. Verify Falco fires: `Container Running as Root User`.
+2. Verify Falco triggers warning alert: `Container Running as Root User`.
 3. Clean up:
 ```bash
-kubectl delete pod test-root-check
+kubectl delete pod test-root-check --ignore-not-found
 ```
+

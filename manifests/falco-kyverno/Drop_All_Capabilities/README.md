@@ -96,29 +96,150 @@ The policy locks down OS-level capabilities:
 The runtime rule monitors execution of kernel manipulation commands:
 - **`proc.name in (nsenter, unshare)` or `proc.cmdline contains "capsh"`**: Detects processes targeting kernel namespaces or capability configuration. If an attacker gains command access inside a container and tries to execute these binaries, Falco flags it as a `WARNING`.
 
-## How to Test
-### Kyverno (Admission Check)
-Try to deploy a pod without specifying dropped capabilities (should be blocked):
-```bash
-kubectl apply -f - <<EOF
+## Test Scenarios & Manifest Examples
+
+### 1. ✅ PASS Case — Explicitly Drops `ALL`
+```yaml
 apiVersion: v1
 kind: Pod
 metadata:
-  name: test-capabilities
+  name: test-pass-drop-all
+  namespace: default
 spec:
   containers:
-  - name: nginx
-    image: nginx
+    - name: app
+      image: nginx:1.25
+      securityContext:
+        capabilities:
+          drop:
+            - ALL
+```
+* **Result**: **PASS** — The container's `securityContext.capabilities.drop` array contains `ALL`.
+
+---
+
+### 2. ❌ FAIL Case — No `securityContext` Block
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-no-context
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+```
+* **Result**: **FAIL** — `has(c.securityContext)` evaluates to `false`.
+
+---
+
+### 3. ❌ FAIL Case — `securityContext` Present, Missing `capabilities`
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-no-drop
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+      securityContext:
+        runAsNonRoot: true
+```
+* **Result**: **FAIL** — `has(c.securityContext.capabilities)` evaluates to `false`.
+
+---
+
+### 4. ❌ FAIL Case — Drops Partial Capabilities, But Not `ALL`
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-partial-drop
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+      securityContext:
+        capabilities:
+          drop:
+            - NET_RAW
+            - SYS_ADMIN
+```
+* **Result**: **FAIL** — `drop.exists(x, x == 'ALL')` evaluates to `false` because `ALL` is not explicitly listed in the `drop` array.
+
+---
+
+### 5. ✅ Realistic Production PASS Case — Drop `ALL`, Add Back Specific Needed Capability
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pass-drop-all-add-net-bind
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+      securityContext:
+        capabilities:
+          drop:
+            - ALL
+          add:
+            - NET_BIND_SERVICE
+```
+* **Result**: **PASS** — The policy validates that `ALL` is in the `drop` array; it permits adding specific required capabilities back (e.g. `NET_BIND_SERVICE` for binding to privileged ports <1024 as non-root).
+
+---
+
+## How to Test
+
+### Kyverno (Admission Control Check)
+Test against the admission webhook in server dry-run mode without persisting test resources to the cluster:
+
+```bash
+# 1. Test PASS case (should be allowed)
+kubectl apply -f - --dry-run=server <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pass-drop-all
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+      securityContext:
+        capabilities:
+          drop:
+            - ALL
+EOF
+
+# 2. Test FAIL case (should be denied)
+kubectl apply -f - --dry-run=server <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-no-context
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
 EOF
 ```
 
 ### Falco (Runtime Check)
-1. Run a shell and invoke a namespace manipulation utility:
+1. Run a shell and invoke a capability/namespace manipulation utility inside a container:
 ```bash
 kubectl run test-cap-use --image=alpine --restart=Never -it -- unshare -h
 ```
 2. Verify Falco triggers alert: `Dangerous Capability Used at Runtime`.
 3. Clean up:
 ```bash
-kubectl delete pod test-cap-use
+kubectl delete pod test-cap-use --ignore-not-found
 ```
+

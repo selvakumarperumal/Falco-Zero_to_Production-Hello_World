@@ -60,13 +60,41 @@ This rule detects attempts to bypass directory boundaries via symlinks:
 - **`evt.type in (symlink, symlinkat)`**: Focuses specifically on symbolic link creation syscalls.
 - **`evt.arg.target startswith "/etc/"` or `/proc/` or `/sys/` or `/var/run/`**: Inspects the symlink target argument. If a link points to these core OS/orchestration directories, Falco triggers a `CRITICAL` alert indicating a potential breakout exploit.
 
+## Test Scenarios & Manifest Examples
+
+### 1. 🚨 RUNTIME ALERT CASE — Symlink Pointing to `/etc/`
+```bash
+# Creating a symlink inside container targeting /etc/
+kubectl run test-symlink-etc --image=alpine --restart=Never -- ln -s /etc/ /tmp/test-etc
+```
+* **Result**: **ALERT (CRITICAL)** — `evt.type = symlink` and `evt.arg.target startswith "/etc/"`. Falco triggers `Symlink Created to Sensitive Path`.
+
+---
+
+### 2. 🛡️ NORMAL OPERATION — Symlink Pointing to Non-Sensitive User Path
+```bash
+# Creating a benign symlink between non-system paths
+kubectl run test-symlink-safe --image=alpine --restart=Never -- ln -s /tmp/foo /tmp/bar
+```
+* **Result**: **NO ALERT** — Target path `/tmp/foo` does not start with `/etc/`, `/proc/`, `/sys/`, or `/var/run/`.
+
+---
+
 ## How to Test
-1. Run a temporary container and generate a symlink pointing to `/etc/`:
+
+### Falco (Runtime Symlink Attack Check)
+1. Run temporary pod creating a symlink to `/etc/`:
 ```bash
 kubectl run test-symlink-creation --image=alpine --restart=Never -it -- ln -s /etc/ /tmp/test-etc
 ```
-2. Verify Falco triggers critical alert: `Symlink Created to Sensitive Path`.
+
+2. Verify Falco logs critical alert: `Symlink Created to Sensitive Path`:
+```bash
+kubectl logs -n falco -l app.kubernetes.io/name=falco | grep "Symlink to sensitive path created"
+```
+
 3. Clean up:
 ```bash
-kubectl delete pod test-symlink-creation
+kubectl delete pod test-symlink-creation test-symlink-etc test-symlink-safe --ignore-not-found
 ```
+

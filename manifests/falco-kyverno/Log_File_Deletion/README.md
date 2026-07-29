@@ -62,13 +62,41 @@ The rule targets defense evasion patterns inside containers:
 - **`fd.name startswith "/var/log/"` or `endswith ".log"` or contains `syslog`, `auth.log`, `history`**: Focuses on files matching typical logging directories, extensions, or system log files.
 - **`not proc.name in (logrotate, journald)`**: Safe lists authorized system processes that naturally truncate or archive logs.
 
+## Test Scenarios & Manifest Examples
+
+### 1. 🚨 RUNTIME ALERT CASE — Log File Unlink (`rm /var/log/app.log`)
+```bash
+# Simulating attacker unlinking log file inside container
+kubectl run test-log-unlink --image=alpine --restart=Never -- sh -c "touch /var/log/audit.log && rm /var/log/audit.log"
+```
+* **Result**: **ALERT (ERROR)** — `evt.type = unlink` on `/var/log/audit.log` matches rule. Falco triggers `Log File Deletion in Container`.
+
+---
+
+### 2. 🛡️ EXEMPT CASE — Authorized Log Maintenance (`logrotate`)
+```bash
+# Legitimate log rotation by safe-listed daemon process
+# proc.name in (logrotate, journald)
+```
+* **Result**: **NO ALERT** — Excluded by condition `not proc.name in (logrotate, journald)`.
+
+---
+
 ## How to Test
-1. Launch a temporary container and perform file write/delete operations inside `/var/log`:
+
+### Falco (Runtime File Tampering Check)
+1. Run temporary pod performing file creation and deletion under `/var/log`:
 ```bash
 kubectl run test-log-del --image=alpine --restart=Never -it -- sh -c "touch /var/log/test.log && rm /var/log/test.log"
 ```
-2. Verify Falco logs an error alert: `Log File Deletion in Container`.
+
+2. Check Falco logs for error alert:
+```bash
+kubectl logs -n falco -l app.kubernetes.io/name=falco | grep "Log File Deletion in Container"
+```
+
 3. Clean up:
 ```bash
-kubectl delete pod test-log-del
+kubectl delete pod test-log-del test-log-unlink --ignore-not-found
 ```
+

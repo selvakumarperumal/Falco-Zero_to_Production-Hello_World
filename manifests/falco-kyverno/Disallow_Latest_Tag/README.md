@@ -133,20 +133,90 @@ The companion Falco rule detects `:latest` images at container startup:
 
 ---
 
+## Test Scenarios & Manifest Examples
+
+### 1. ✅ PASS Case — Explicit Version Tag
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pass-versioned-tag
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25.4
+```
+* **Result**: **PASS** — Image reference `nginx:1.25.4` does not end with `:latest`.
+
+---
+
+### 2. ❌ FAIL Case 1 — Explicit `:latest` Tag
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-latest-tag
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:latest
+```
+* **Result**: **FAIL** — `c.image.endsWith(':latest')` evaluates to `true`, violating the validation rule.
+
+---
+
+### 3. ❌ FAIL Case 2 — Init Container Using `:latest`
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-init-latest
+  namespace: default
+spec:
+  initContainers:
+    - name: init-task
+      image: busybox:latest
+  containers:
+    - name: app
+      image: nginx:1.25.4
+```
+* **Result**: **FAIL** — `object.spec.?initContainers.orValue([])` checks init containers, rejecting `busybox:latest`.
+
+---
+
 ## How to Test
 
-### Kyverno (Admission Check)
-Attempt to deploy a pod using the `:latest` tag (it should be denied by Kyverno):
-
+### Kyverno (Admission Control Dry-Run Check)
 ```bash
-kubectl run test-latest --image=nginx:latest --restart=Never
-```
+# 1. Test PASS case (explicit version tag)
+kubectl apply -f - --dry-run=server <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pass-versioned
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25.4
+EOF
 
-*Expected Output:*
-```text
-Error from server (Forbidden): admission webhook "vpol.validate.kyverno.svc-fail" denied the request:
-Policy disallow-latest-tag failed: An image tag is required and must not be ':latest'.
+# 2. Test FAIL case (:latest tag)
+kubectl apply -f - --dry-run=server <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-latest
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:latest
+EOF
 ```
 
 ### Falco (Runtime Check)
 If admission control is in `Audit` mode or bypassed, starting a container with `:latest` will trigger a Falco notice alert: `Container Running with Latest Tag`.
+

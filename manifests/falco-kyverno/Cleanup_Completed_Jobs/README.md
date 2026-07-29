@@ -83,16 +83,66 @@ rules:
 
 ---
 
+## Test Scenarios & Manifest Examples
+
+### 1. ✅ TARGET FOR DELETION — Completed Job
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: test-completed-job
+  namespace: default
+spec:
+  template:
+    spec:
+      containers:
+        - name: task
+          image: busybox:1.36
+          command: ["echo", "job finished successfully"]
+      restartPolicy: Never
+```
+* **Result**: **DELETED** — Upon job completion, `object.status.conditions` contains `{type: "Complete", status: "True"}`. The CEL condition evaluates to `true` on the cron schedule (`0 2 * * *`), deleting the resource.
+
+---
+
+### 2. 🛡️ IGNORED FROM DELETION — Failed Job
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: test-failed-job
+  namespace: default
+spec:
+  template:
+    spec:
+      containers:
+        - name: task
+          image: busybox:1.36
+          command: ["sh", "-c", "exit 1"]
+      restartPolicy: Never
+```
+* **Result**: **NOT DELETED** — When a job fails, `object.status.conditions` contains `{type: "Failed", status: "True"}`. The CEL condition `c.type == 'Complete'` evaluates to `false`, leaving the failed job intact for investigation.
+
+---
+
 ## How to Test
 
-### Verify the Policy is Active
+### Verify DeletingPolicy Configuration
 ```bash
-kubectl get deletingpolicies
+# Verify the policy is installed and inspect its schedule
+kubectl get deletingpolicies cleanup-completed-jobs -o yaml
 ```
 
-### Create a Test Job
+### Create Completed & Failed Test Jobs
 ```bash
-kubectl create job test-cleanup --image=busybox -- echo "done"
-```
+# 1. Create a job that will succeed (target for cleanup)
+kubectl create job test-job-pass --image=busybox:1.36 -- echo "success"
 
-Wait for the job to complete, then wait for the next cron cycle (or manually trigger) to verify deletion.
+# 2. Create a job that will fail (should be preserved)
+kubectl create job test-job-fail --image=busybox:1.36 -- sh -c "exit 1"
+
+# 3. Check status conditions after execution
+kubectl get job test-job-pass test-job-fail -o custom-columns=NAME:.metadata.name,CONDITIONS:.status.conditions[*].type
+```
+*Expected conditions output:* `Complete` for `test-job-pass` and `Failed` for `test-job-fail`.
+

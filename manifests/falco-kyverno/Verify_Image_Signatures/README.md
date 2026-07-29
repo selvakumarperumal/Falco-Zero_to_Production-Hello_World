@@ -95,20 +95,84 @@ spec:
 
 ---
 
-## How to Setup
+## Test Scenarios & Manifest Examples
 
-### 1. Generate a Cosign Key Pair
+### 1. ✅ PASS Case — Validly Signed Cosign Image (`ghcr.io/*`)
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pass-signed-image
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: ghcr.io/your-org/signed-app:v1.0.0
+```
+* **Result**: **PASS** — Kyverno invokes `verifyImageSignatures()` against `attestors.cosign`. Cryptographic signature matches public key. Returns count `> 0`.
+
+---
+
+### 2. ❌ FAIL Case — Unsigned Image from Matched Domain (`ghcr.io/*`)
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-unsigned-image
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: ghcr.io/your-org/unsigned-app:v1.0.0
+```
+* **Result**: **FAIL** — `verifyImageSignatures()` returns `0` (no valid signature found). Denied with message `"Image signature verification failed. All images must be signed with Cosign."`
+
+---
+
+### 3. 🛡️ EXEMPT CASE — Image Outside Matched Glob Pattern
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-exempt-other-registry
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: registry.k8s.io/pause:3.9
+```
+* **Result**: **PASS (EXEMPT)** — `matchImageReferences: ['ghcr.io/*']` skips verification for images outside the `ghcr.io/*` pattern.
+
+---
+
+## How to Setup & Test
+
+### 1. Generate Cosign Key Pair
 ```bash
 cosign generate-key-pair
 ```
 
-### 2. Sign Your Images
+### 2. Sign Target Image
 ```bash
-cosign sign --key cosign.key ghcr.io/your-org/your-image:v1.0
+cosign sign --key cosign.key ghcr.io/your-org/your-image:v1.0.0
 ```
 
-### 3. Replace the Public Key
-Replace `REPLACE_WITH_YOUR_COSIGN_PUBLIC_KEY` in the policy with the contents of `cosign.pub`.
+### 3. Apply Policy with Public Key
+Replace `REPLACE_WITH_YOUR_COSIGN_PUBLIC_KEY` in `kyverno.yaml` with your `cosign.pub` contents and apply.
 
-### 4. Change to Enforce Mode
-Once verified, change `validationActions: [Audit]` to `validationActions: [Deny]` to block unsigned images.
+### 4. Admission Control Dry-Run Check
+```bash
+# Test dry-run deployment of signed/unsigned images
+kubectl apply -f - --dry-run=server <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-signed-pod
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: ghcr.io/your-org/your-image:v1.0.0
+EOF
+```
+

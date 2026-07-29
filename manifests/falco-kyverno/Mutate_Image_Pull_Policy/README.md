@@ -72,9 +72,57 @@ The policy alters configurations automatically:
 - **`(image): "*:latest"`**: In Kyverno, parenthesis on a field represent a conditional check or anchor. This rule only modifies containers where the image tag ends in `latest`.
 - **`imagePullPolicy: "Always"`**: The mutation patch sets the image pull policy to Always for the matched containers.
 
-## How to Test
-1. Submit a dry-run server request for a pod using `:latest` without specifying the pull policy:
-```bash
-kubectl run test-mutate-pull --image=nginx:latest --dry-run=server -o yaml | grep imagePullPolicy
+## Test Scenarios & Manifest Examples
+
+### 1. ✅ MUTATED CASE — Container Using `:latest` Tag
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-mutate-latest
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:latest
 ```
-2. Confirm the output includes `imagePullPolicy: Always` mutated by Kyverno.
+* **Result**: **MUTATED** — `c.image.endsWith(':latest')` evaluates to `true`. Kyverno mutates `imagePullPolicy` to `Always`.
+
+---
+
+### 2. 🛡️ UNMUTATED CASE — Container Using Explicit Version Tag
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-unmutated-versioned
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25.4
+      imagePullPolicy: IfNotPresent
+```
+* **Result**: **UNMUTATED** — Image tag is `1.25.4`. Condition `endsWith(':latest') || !contains(':')` evaluates to `false`. `imagePullPolicy` remains `IfNotPresent`.
+
+---
+
+## How to Test
+
+### Kyverno (Admission Mutation Dry-Run Check)
+```bash
+# Test mutation of :latest pod via server dry-run
+kubectl apply -f - --dry-run=server -o yaml <<EOF | grep imagePullPolicy
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-mutate-pull
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:latest
+EOF
+# Expected Output: imagePullPolicy: Always
+```
+

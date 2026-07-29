@@ -68,17 +68,56 @@ object.status.phase == 'Failed'
 
 ---
 
+## Test Scenarios & Manifest Examples
+
+### 1. ✅ TARGET FOR DELETION — Failed Pod
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-failed-pod
+  namespace: default
+spec:
+  restartPolicy: Never
+  containers:
+    - name: app
+      image: busybox:1.36
+      command: ["/bin/false"]
+```
+* **Result**: **DELETED** — The container exits with exit code 1 and `restartPolicy: Never`, causing the pod phase to become `status.phase == 'Failed'`. Kyverno's cleanup controller evaluates the condition `true` and deletes the pod on schedule (`0 */6 * * *`).
+
+---
+
+### 2. 🛡️ IGNORED FROM DELETION — Succeeded or Running Pod
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-succeeded-pod
+  namespace: default
+spec:
+  restartPolicy: Never
+  containers:
+    - name: app
+      image: busybox:1.36
+      command: ["echo", "finished"]
+```
+* **Result**: **NOT DELETED** — The pod completes with phase `Succeeded`. `object.status.phase == 'Failed'` evaluates to `false`, leaving the pod untouched by this specific policy.
+
+---
+
 ## How to Test
 
-### Create a Pod That Will Fail
+### Create Test Pods
 ```bash
-kubectl run test-fail --image=busybox --restart=Never -- /bin/false
-```
+# 1. Create a pod that fails (target for deletion)
+kubectl run test-fail-pod --image=busybox:1.36 --restart=Never -- /bin/false
 
-### Verify Pod is in Failed State
-```bash
-kubectl get pod test-fail -o jsonpath='{.status.phase}'
+# 2. Verify phase is 'Failed'
+kubectl get pod test-fail-pod -o jsonpath='{.status.phase}'
 # Output: Failed
+
+# 3. Clean up manually if not waiting for cron schedule
+kubectl delete pod test-fail-pod --ignore-not-found
 ```
 
-Wait for the next cron cycle to verify automatic deletion.

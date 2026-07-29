@@ -65,13 +65,50 @@ This rule detects attempts to establish interactive terminal control:
 - **`proc.cmdline contains "/dev/tcp/"`**: Detects bash socket redirectors.
 - **`proc.cmdline contains "socket"` / `"TCPSocket"` / `"fsockopen"`**: Detects socket creation one-liners in common scripting languages (Python, Perl, Ruby, PHP). Any match triggers a `CRITICAL` alert.
 
+## Test Scenarios & Manifest Examples
+
+### 1. 🚨 RUNTIME ALERT CASE 1 — Netcat Execution (`nc`)
+```bash
+# Executing netcat binary inside container
+kubectl run test-nc-shell --image=alpine --restart=Never -it -- nc -h
+```
+* **Result**: **ALERT (CRITICAL)** — `proc.name = "nc"` matches rule condition. Falco triggers `Possible Reverse Shell Detected`.
+
+---
+
+### 2. 🚨 RUNTIME ALERT CASE 2 — Python Socket Creation (`python3 -c "import socket..."`)
+```bash
+# Simulating a python reverse shell one-liner
+kubectl run test-py-shell --image=python:3.11-slim --restart=Never -- python3 -c "import socket; print('socket test')"
+```
+* **Result**: **ALERT (CRITICAL)** — `proc.name = "python3"` and `proc.cmdline contains "socket"`.
+
+---
+
+### 3. 🛡️ NORMAL OPERATION — Standard Web Application HTTP Client
+```bash
+# Legitimate HTTP requests using curl or python requests without raw socket construction
+kubectl run test-curl --image=curlimages/curl --restart=Never -- curl https://example.com
+```
+* **Result**: **NO ALERT** — Process name `curl` does not match reverse shell tools or socket expressions.
+
+---
+
 ## How to Test
-1. Run a container and execute a netcat command structure:
+
+### Falco (Runtime Reverse Shell Check)
+1. Run a container and execute netcat command structure:
 ```bash
 kubectl run test-rev-shell --image=alpine --restart=Never -it -- nc -h
 ```
-2. Verify Falco triggers a critical alert: `Possible Reverse Shell Detected`.
+
+2. Verify Falco triggers a critical alert: `Possible Reverse Shell Detected`:
+```bash
+kubectl logs -n falco -l app.kubernetes.io/name=falco | grep "Possible reverse shell detected"
+```
+
 3. Clean up:
 ```bash
-kubectl delete pod test-rev-shell
+kubectl delete pod test-rev-shell test-nc-shell test-py-shell test-curl --ignore-not-found
 ```
+

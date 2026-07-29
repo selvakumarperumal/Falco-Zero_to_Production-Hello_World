@@ -146,24 +146,110 @@ The Falco check catches namespace sharing at runtime:
 
 ---
 
-## How to Test
+## Test Scenarios & Manifest Examples
 
-### Kyverno (Admission Check)
-Attempt to deploy a pod with host namespace access enabled (should be blocked in `Deny` mode or reported in `Audit` mode):
-
-```bash
-kubectl apply -f - <<EOF
+### 1. ✅ PASS Case — Standard Isolated Pod (No Host Namespaces)
+```yaml
 apiVersion: v1
 kind: Pod
 metadata:
-  name: test-host-ns
+  name: test-pass-isolated-ns
+  namespace: default
+spec:
+  hostPID: false
+  hostIPC: false
+  hostNetwork: false
+  containers:
+    - name: app
+      image: nginx:1.25
+```
+* **Result**: **PASS** — All host namespace flags evaluate to `false` or are omitted (defaulting to isolated).
+
+---
+
+### 2. ❌ FAIL Case 1 — Pod Sharing Host PID Namespace (`hostPID: true`)
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-host-pid
+  namespace: default
 spec:
   hostPID: true
   containers:
-  - name: nginx
-    image: nginx
+    - name: app
+      image: nginx:1.25
+```
+* **Result**: **FAIL** — `object.spec.hostPID == true` violates rule `!(has(hostPID) && hostPID == true)`.
+
+---
+
+### 3. ❌ FAIL Case 2 — Pod Sharing Host Network Namespace (`hostNetwork: true`)
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-host-network
+  namespace: default
+spec:
+  hostNetwork: true
+  containers:
+    - name: app
+      image: nginx:1.25
+```
+* **Result**: **FAIL** — `object.spec.hostNetwork == true` violates policy validations.
+
+---
+
+### 4. ❌ FAIL Case 3 — Pod Sharing Host IPC Namespace (`hostIPC: true`)
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-host-ipc
+  namespace: default
+spec:
+  hostIPC: true
+  containers:
+    - name: app
+      image: nginx:1.25
+```
+* **Result**: **FAIL** — `object.spec.hostIPC == true` is denied.
+
+---
+
+## How to Test
+
+### Kyverno (Admission Control Dry-Run Check)
+```bash
+# 1. Test PASS case (isolated pod should succeed)
+kubectl apply -f - --dry-run=server <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pass-isolated
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+EOF
+
+# 2. Test FAIL case (hostPID pod should be blocked)
+kubectl apply -f - --dry-run=server <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-host-pid
+  namespace: default
+spec:
+  hostPID: true
+  containers:
+    - name: app
+      image: nginx:1.25
 EOF
 ```
 
 ### Falco (Runtime Check)
 If admission control is bypassed or in audit-only mode, starting a container with host namespaces will fire the alert: `Container Running with Host PID or Network`.
+

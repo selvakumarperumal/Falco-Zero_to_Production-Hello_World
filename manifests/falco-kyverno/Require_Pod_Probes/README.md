@@ -93,11 +93,107 @@ The companion Falco rule detects unstable application crash loops:
 - **`proc.name in (sh, bash) and proc.cmdline contains "exit"`**: Identifies shell-based termination execution.
 - **`proc.duration <= 5000000000`**: Tracks the process lifespan (5 billion nanoseconds = 5 seconds). If shell processes execute and exit within 5 seconds, it flags potential crash loop behavior.
 
+## Test Scenarios & Manifest Examples
+
+### 1. ✅ PASS Case — Both `livenessProbe` and `readinessProbe` Defined
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pass-probes
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+      livenessProbe:
+        httpGet:
+          path: /healthz
+          port: 80
+        initialDelaySeconds: 5
+      readinessProbe:
+        httpGet:
+          path: /ready
+          port: 80
+        initialDelaySeconds: 2
+```
+* **Result**: **PASS** — Both `has(c.livenessProbe)` and `has(c.readinessProbe)` evaluate `true`.
+
+---
+
+### 2. ❌ FAIL Case 1 — Pod Missing `readinessProbe`
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-liveness-only
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+      livenessProbe:
+        httpGet:
+          path: /healthz
+          port: 80
+```
+* **Result**: **FAIL** — `has(c.readinessProbe)` evaluates `false`.
+
+---
+
+### 3. ❌ FAIL Case 2 — Pod Missing Probes Entirely
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-no-probes
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+```
+* **Result**: **FAIL** — Lacks both probes.
+
+---
+
 ## How to Test
-### Kyverno (Admission Check)
-Try to deploy a pod without defining health probes (depending on mode, it registers an audit report or gets blocked):
+
+### Kyverno (Admission Control Dry-Run Check)
 ```bash
-kubectl run test-no-probes --image=nginx --restart=Never
+# 1. Test PASS case (both probes specified)
+kubectl apply -f - --dry-run=server <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pass-probes
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+      livenessProbe:
+        httpGet:
+          path: /
+          port: 80
+      readinessProbe:
+        httpGet:
+          path: /
+          port: 80
+EOF
+
+# 2. Test FAIL case (probes omitted)
+kubectl apply -f - --dry-run=server <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-no-probes
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+EOF
 ```
 
 ### Falco (Runtime Check)
@@ -108,5 +204,6 @@ kubectl run test-crashing --image=alpine --restart=Never -- sh -c "exit 1"
 2. Verify Falco triggers alert: `Container Process Crash Loop Detected`.
 3. Clean up:
 ```bash
-kubectl delete pod test-crashing
+kubectl delete pod test-crashing --ignore-not-found
 ```
+

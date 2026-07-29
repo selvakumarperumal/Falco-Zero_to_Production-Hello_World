@@ -94,27 +94,108 @@ The runtime rule acts as a fallback for unauthorized reverse shell/backdoor list
 - **`fd.sport != 0`**: Ensures a source port is allocated.
 - **`not fd.sport in (80, 443, 8080, 8443, 3000, 5000, 9090)`**: Lists approved port exemptions. If a containerized process attempts to open a server socket on any other port, it triggers a `NOTICE` alert.
 
-## How to Test
-### Kyverno (Admission Check)
-Try to deploy a service using NodePort (should be blocked):
-```bash
-kubectl apply -f - <<EOF
+## Test Scenarios & Manifest Examples
+
+### 1. ✅ PASS Case 1 — Service Type `ClusterIP`
+```yaml
 apiVersion: v1
 kind: Service
 metadata:
-  name: test-nodeport
+  name: test-pass-clusterip
+  namespace: default
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: 8080
+  selector:
+    app: web
+```
+* **Result**: **PASS** — `object.spec.type != 'NodePort'` evaluates to `true`.
+
+---
+
+### 2. ✅ PASS Case 2 — Service Type `LoadBalancer`
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-pass-lb
+  namespace: default
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 443
+      targetPort: 8443
+  selector:
+    app: web
+```
+* **Result**: **PASS** — Service type is `LoadBalancer`, allowed for managed external entry points.
+
+---
+
+### 3. ❌ FAIL Case — Service Type `NodePort`
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-fail-nodeport
+  namespace: default
 spec:
   type: NodePort
   ports:
-  - port: 80
+    - port: 80
+      nodePort: 30080
+  selector:
+    app: web
+```
+* **Result**: **FAIL** — `object.spec.type == 'NodePort'` violates the policy rule.
+
+---
+
+## How to Test
+
+### Kyverno (Admission Control Dry-Run Check)
+```bash
+# 1. Test PASS case (ClusterIP Service should be allowed)
+kubectl apply -f - --dry-run=server <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-pass-svc
+  namespace: default
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+  selector:
+    app: nginx
+EOF
+
+# 2. Test FAIL case (NodePort Service should be denied)
+kubectl apply -f - --dry-run=server <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-fail-svc
+  namespace: default
+spec:
+  type: NodePort
+  ports:
+    - port: 80
   selector:
     app: nginx
 EOF
 ```
 
-### Falco (Runtime Check)
-1. Run a container and listen on an unapproved port:
+### Falco (Runtime Listening Port Check)
+1. Run a container and listen on an unapproved port (outside 80, 443, 8080, 8443, 3000, 5000, 9090):
 ```bash
 kubectl run test-port-bind --image=alpine --restart=Never -it -- nc -l -p 9999
 ```
 2. Verify Falco alerts show: `Unexpected Listening Port in Container`.
+3. Clean up:
+```bash
+kubectl delete pod test-port-bind --ignore-not-found
+```
+

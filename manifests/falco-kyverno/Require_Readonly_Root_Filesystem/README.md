@@ -101,20 +101,125 @@ The companion Falco rule detects write operations at runtime:
 - **`evt.is_open_write = true`**: Triggers only when a file open syscall requests write access.
 - **`not fd.name startswith "/tmp"` or `/proc` or `/dev` or `/sys`**: Excludes directories that require writing or virtual filesystems. Write events in any other filesystem path trigger a `WARNING` level alert.
 
+## Test Scenarios & Manifest Examples
+
+### 1. ✅ PASS Case — Read-Only Root Filesystem Enabled
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pass-readonly-fs
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+      securityContext:
+        readOnlyRootFilesystem: true
+```
+* **Result**: **PASS** — `c.securityContext.readOnlyRootFilesystem == true` evaluates `true`.
+
+---
+
+### 2. ✅ REALISTIC PASS Case — Read-Only Root FS with Writable `/tmp` Volume Mount
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pass-readonly-with-tmp
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+      securityContext:
+        readOnlyRootFilesystem: true
+      volumeMounts:
+        - mountPath: /tmp
+          name: tmp-volume
+  volumes:
+    - name: tmp-volume
+      emptyDir: {}
+```
+* **Result**: **PASS** — Root filesystem remains read-only while temporary file writes are scoped to the `emptyDir` volume.
+
+---
+
+### 3. ❌ FAIL Case 1 — `readOnlyRootFilesystem: false`
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-writable-fs
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+      securityContext:
+        readOnlyRootFilesystem: false
+```
+* **Result**: **FAIL** — `c.securityContext.readOnlyRootFilesystem == true` evaluates `false`.
+
+---
+
+### 4. ❌ FAIL Case 2 — `readOnlyRootFilesystem` Omitted
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-omitted-readonly
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+```
+* **Result**: **FAIL** — `has(c.securityContext.readOnlyRootFilesystem)` evaluates `false`.
+
+---
+
 ## How to Test
-### Kyverno (Admission Check)
-Create a pod without setting readOnlyRootFilesystem to true (triggers Audit or Enforce):
+
+### Kyverno (Admission Control Dry-Run Check)
 ```bash
-kubectl run test-writable-fs --image=nginx --restart=Never
+# 1. Test PASS case (readOnlyRootFilesystem: true)
+kubectl apply -f - --dry-run=server <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pass-readonly
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+      securityContext:
+        readOnlyRootFilesystem: true
+EOF
+
+# 2. Test FAIL case (omitted readOnlyRootFilesystem)
+kubectl apply -f - --dry-run=server <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-fail-writable
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: nginx:1.25
+EOF
 ```
 
-### Falco (Runtime Check)
-1. Run a pod and try to write directly to a root directory:
+### Falco (Runtime Write Check)
+1. Run a pod and attempt writing to a non-exempt root directory:
 ```bash
 kubectl run test-root-write --image=alpine --restart=Never -it -- sh -c "echo 'bad' > /root/compromised.txt"
 ```
-2. Check Falco alerts for: `Write to Container Root Filesystem`.
+2. Verify Falco logs warning alert: `Write to Container Root Filesystem`.
 3. Clean up:
 ```bash
-kubectl delete pod test-root-write
+kubectl delete pod test-root-write --ignore-not-found
 ```
+

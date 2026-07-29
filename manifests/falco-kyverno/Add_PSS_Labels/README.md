@@ -70,16 +70,54 @@ The policy modifies `Namespace` objects at creation time:
   - `pod-security.kubernetes.io/enforce: baseline`: Rejects any pods that violate the baseline security standard (e.g. running privileged containers, sharing host namespaces).
   - `pod-security.kubernetes.io/warn: restricted`: Warns users if they run a pod violating the stricter restricted standard (e.g. running as root).
 
+## Test Scenarios & Manifest Examples
+
+### 1. ✅ Mutated PASS Case — New Namespace Receives Baseline & Warn PSS Labels
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: test-app-ns
+```
+* **Result**: **MUTATED** — Kyverno intercepts creation and applies the following labels:
+  - `pod-security.kubernetes.io/enforce: "baseline"`
+  - `pod-security.kubernetes.io/enforce-version: "latest"`
+  - `pod-security.kubernetes.io/warn: "restricted"`
+  - `pod-security.kubernetes.io/warn-version: "latest"`
+
+---
+
+### 2. ✅ Explicit Custom Labels Preserved
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: test-custom-ns
+  labels:
+    team: backend
+    environment: staging
+```
+* **Result**: **MUTATED & MERGED** — Custom labels `team: backend` and `environment: staging` are retained while PSS labels are merged via `ApplyConfiguration`.
+
+---
+
 ## How to Test
-1. Create a test namespace:
+
+### Kyverno (Admission Control Dry-Run Check)
+Test against the admission webhook using server dry-run to observe the mutated output without persisting resources:
+
 ```bash
-kubectl create namespace test-pss
+# Test namespace creation and inspect mutated labels
+kubectl create namespace test-pss-dryrun --dry-run=server -o yaml | grep -A 6 labels
 ```
-2. Verify that Kyverno has automatically mutated the namespace to include the baseline and restricted PSS labels:
-```bash
-kubectl get namespace test-pss --show-labels
+
+*Expected Output:*
+```yaml
+  labels:
+    kubernetes.io/metadata.name: test-pss-dryrun
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest
 ```
-3. Clean up:
-```bash
-kubectl delete namespace test-pss
-```
+
