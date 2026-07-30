@@ -94,7 +94,53 @@ Deployment my-api has 1 replica(s). Minimum 2 required for HA in production.
 
 ---
 
+### ⚠️ Critical Gotcha: `matchConditions` Namespace Labeling vs Namespace Name
+
+A classic Kyverno/CEL policy pitfall occurs when teams assume setting `metadata.namespace: prod-ns` on a Deployment is enough to activate a production policy. `matchConditions` evaluates the live **`Namespace` object's labels** (`namespaceObject`) in the cluster, **not** the Deployment's `metadata.namespace` string.
+
+```yaml
+matchConditions:
+  - expression: >-
+      has(namespaceObject.metadata.labels) &&
+      'environment' in namespaceObject.metadata.labels &&
+      namespaceObject.metadata.labels['environment'] == 'production'
+```
+
+#### Key Distinction:
+* **`metadata.namespace: prod-ns`**: Tells Kubernetes which namespace to place the Deployment in (a string name).
+* **`namespaceObject.metadata.labels`**: A separate live resource, e.g.:
+  ```yaml
+  apiVersion: v1
+  kind: Namespace
+  metadata:
+    name: prod-ns
+    labels:
+      environment: production   # ← Required for matchConditions to evaluate true
+  ```
+
+Whether a manifest truly passes depends on the live Namespace object's labels:
+
+| Scenario | `matchConditions` Result | Policy Applies? | Outcome (`replicas: 2`) | Outcome (`replicas: 1`) |
+|---|---|---|---|---|
+| `prod-ns` Namespace **IS** labeled `environment: production` | `true` | **Yes** | **PASS** (`replicas >= 2`) | **DENIED** (`replicas < 2`) |
+| `prod-ns` Namespace has no labels or a missing/different `environment` label | `false` (short-circuits on `'environment' in ...`) | **No** (Policy skipped entirely) | **ADMITTED** (Bypassed) | **ADMITTED** (Bypassed) |
+
+> [!WARNING]
+> `matchConditions` is 100% label-driven — the namespace name string is irrelevant to it. If the target namespace is not explicitly labeled `environment: production`, the policy silently skips evaluation, allowing single-replica deployments to be admitted.
+
+---
+
 ## Test Scenarios & Manifest Examples
+
+### Required Namespace Prerequisites
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: prod-ns
+  labels:
+    environment: production
+```
 
 ### 1. ✅ PASS Case 1 — Production Deployment with HA Replicas (`replicas: 2`)
 ```yaml
@@ -117,7 +163,7 @@ spec:
         - name: app
           image: nginx:1.25
 ```
-* **Result**: **PASS** — Target namespace has label `environment: production` (`matchConditions` evaluates `true`). `object.spec.replicas >= 2` evaluates `true`.
+* **Result**: **PASS** — Target namespace `prod-ns` has label `environment: production` (`matchConditions` evaluates `true`). `object.spec.replicas >= 2` evaluates `true`.
 
 ---
 
