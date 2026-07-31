@@ -434,9 +434,9 @@ evt.type in (open, openat, openat2)
 ```
 
 > [!NOTE]
-> **Deprecation Warning (Falco 0.42.0+):**
-> The `evt.dir` field and the concept of event direction (`<` exit / `>` enter) are **deprecated in Falco 0.42.0+** and removed in recent Falco versions because Falco dropped syscall enter (`>`) events to streamline processing.
-> All rules now process exit events natively. You should omit `evt.dir = <` or `evt.dir = >` from all Falco rule conditions.
+> **Removed in Falco 0.44.1:**
+> The `evt.dir` field and the concept of event direction (`<` exit / `>` enter) were deprecated in Falco 0.42.0 and **fully removed in Falco 0.44.x** because Falco dropped syscall enter (`>`) events to streamline processing.
+> All rules now process exit events natively. You must omit `evt.dir = <` or `evt.dir = >` from all Falco rule conditions.
 
 
 ```yaml

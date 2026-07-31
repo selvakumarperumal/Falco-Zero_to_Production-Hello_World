@@ -55,7 +55,7 @@ data:
 ## Detailed Explanation
 ### Falco Rule Manifest Explanation
 This is a detection-only control monitoring user session spawn:
-- **`spawned_process and container`**: Listens to new processes inside container boundaries.
+- **`evt.type in (execve, execveat) and evt.failed = false and container`**: Listens for successful process execution inside container boundaries.
 - **`proc.name in (bash, sh, zsh, ksh, csh, fish, dash)`**: Monitors common shells.
 - **`proc.tty != 0`**: Ensures the shell is linked to an interactive terminal session (e.g. `kubectl exec -it`). This helps differentiate an interactive session from script/system processes running non-interactively (which have TTY = 0).
 - **`not k8s.ns.name in (kube-system, kyverno)`**: Exempts system namespaces to avoid alerts on cluster administration operations.

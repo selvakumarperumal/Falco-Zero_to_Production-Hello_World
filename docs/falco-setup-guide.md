@@ -138,11 +138,12 @@ data:
     - rule: Unexpected Shell in Hello World Pod
       desc: >
         Detects an interactive shell spawned inside the hello-world pod.
+      source: syscall
       condition: >
-        spawned_process and
-        container and
-        k8s.pod.name = "hello-world" and
-        proc.name in (bash, sh, zsh)
+        evt.type in (execve, execveat) and evt.failed = false
+        and container
+        and k8s.pod.name = "hello-world"
+        and proc.name in (bash, sh, zsh)
       output: >
         Shell spawned in hello-world pod (user=%user.name command=%proc.cmdline
         pod=%k8s.pod.name container=%container.id image=%container.image.repository)
@@ -224,13 +225,13 @@ flowchart TB
 
 ### The problem without Reloader
 
-Updating a ConfigMap doesn't restart the pods using it. Kubernetes does update the mounted file inside the container (~60 seconds via kubelet sync), but **Falco reads its rules once at process startup** — it has no file-watcher on `/etc/falco/rules.d/`. So the new YAML sits on disk, correct and updated, but the running Falco process still evaluates the old rule set until something restarts it.
+Updating a ConfigMap doesn't restart the pods using it. Kubernetes does update the mounted file inside the container (~60 seconds via kubelet sync). Falco 0.44.1 supports `watch_config_files: true` (enabled by default), which auto-reloads configuration and rule files when they change on disk. However, **Kubernetes ConfigMap volume mounts may not always trigger filesystem change events reliably**, and in some environments Falco may not detect the update. Reloader guarantees a clean restart.
 
 | Step | Automatic? |
 |------|-----------|
 | `kubectl apply` → ConfigMap updated in cluster | ✅ yes |
 | Updated file appears inside pod's mounted volume | ✅ yes (~60s) |
-| Falco process re-reads and applies the new rule | ❌ **no** — needs a pod restart |
+| Falco process re-reads and applies the new rule | ⚠️ **sometimes** — `watch_config_files: true` may detect it, but not guaranteed for ConfigMap mounts |
 
 **Reloader closes this gap.**
 

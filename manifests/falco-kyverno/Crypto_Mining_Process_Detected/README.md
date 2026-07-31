@@ -72,7 +72,7 @@ data:
 The rule captures runtime cryptocurrency hijacking behavior:
 - **`list: crypto_mining_processes`**: Defines a list of known crypto mining executable names (like `xmrig`, `minerd`).
 - **`condition`**: Triggers when all the following evaluate to true:
-  - `spawned_process`: A new program/process execution event (syscall `execve`).
+  - `evt.type in (execve, execveat) and evt.failed = false`: A successful program/process execution event (syscalls `execve` or `execveat`).
   - `container`: The event originates inside a container (not the host).
   - The process name (`proc.name`) is in the `crypto_mining_processes` list OR the command line (`proc.cmdline`) contains stratum protocols (`stratum+tcp://`, `stratum+ssl://`) or miner algorithms (`cryptonight`, `randomx`).
 - **`output`**: Details the command, pod, namespace, image, and executing user.

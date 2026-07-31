@@ -14,7 +14,7 @@ data:
         not in the approved list.
       source: syscall
       condition: >
-        evt.type in (execve, execveat) and evt.failed = false and container and proc.vpid = 1 and container
+        evt.type in (execve, execveat) and evt.failed = false and container and proc.vpid = 1
         and not container.image.repository contains "dkr.ecr"
         and not container.image.repository contains "ghcr.io"
         and not container.image.repository contains "gcr.io"

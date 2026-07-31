@@ -4,7 +4,7 @@
 |---|---|
 | **Type** | Kyverno (ValidatingPolicy) + Falco (Detection) |
 | **Kyverno Prevention** | Validates that container and init container images do not end with the `:latest` tag. |
-| **Falco Detection** | Detects container start events (`container_started`) where the image repository tag is `latest` or omitted. |
+| **Falco Detection** | Detects container start events where the image repository tag is `latest` or omitted. |
 
 ## Description
 Ensures all container deployments use explicit, versioned image tags instead of the mutable `:latest` tag to guarantee deployment reproducibility, auditing, and supply chain security. Automatically flags or blocks `:latest` images at admission time and generates runtime alerts upon container initialization.
@@ -46,10 +46,12 @@ object.spec.?initContainers.orValue([]).all(c, !c.image.endsWith(':latest'))
 If admission policies are running in `Audit` mode or bypassed, Falco monitors container initialization events at runtime:
 
 ```falco
-container_started and (container.image.tag = "latest" or container.image.tag = "")
+evt.type in (execve, execveat) and evt.failed = false
+and container and proc.vpid = 1
+and (container.image.tag = "latest" or container.image.tag = "")
 ```
 
-* **`container_started` Macro**: Fires upon container creation.
+* **`evt.type in (execve, execveat) and evt.failed = false and container and proc.vpid = 1`**: Fires upon the first process execution in a newly started container (equivalent to the `container_started` macro).
 * **Tag Inspection**: Checks if `container.image.tag` is explicitly `"latest"` or blank (which defaults to `latest` in container runtimes), raising a `NOTICE` priority alert.
 
 ---
@@ -106,8 +108,9 @@ data:
         Detects a running container using the :latest image tag.
       source: syscall
       condition: >
-        container_started and
-        (container.image.tag = "latest" or container.image.tag = "")
+        evt.type in (execve, execveat) and evt.failed = false
+        and container and proc.vpid = 1
+        and (container.image.tag = "latest" or container.image.tag = "")
       output: >
         Container running with :latest tag
         (image=%container.image.repository:%container.image.tag
@@ -127,7 +130,7 @@ The Kyverno validation enforces image tag discipline at admission time:
 
 ### Falco Rule Manifest Explanation
 The companion Falco rule detects `:latest` images at container startup:
-- **`container_started`**: Triggers once when a container is initialized by the container runtime.
+- **`evt.type in (execve, execveat) and evt.failed = false and container and proc.vpid = 1`**: Triggers once when a container's first process is initialized by the container runtime.
 - **`container.image.tag = "latest" or container.image.tag = ""`**: Checks if the resolved image tag is explicitly `"latest"` or missing (empty string).
 - **Priority**: `NOTICE` — logs a notification for security and platform engineering teams to track floating tags in running workloads.
 

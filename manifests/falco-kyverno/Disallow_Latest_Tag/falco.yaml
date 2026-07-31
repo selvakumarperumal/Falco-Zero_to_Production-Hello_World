@@ -13,8 +13,9 @@ data:
         Detects a running container using the :latest image tag.
       source: syscall
       condition: >
-        container_started and
-        (container.image.tag = "latest" or container.image.tag = "")
+        evt.type in (execve, execveat) and evt.failed = false
+        and container and proc.vpid = 1
+        and (container.image.tag = "latest" or container.image.tag = "")
       output: >
         Container running with :latest tag
         (image=%container.image.repository:%container.image.tag

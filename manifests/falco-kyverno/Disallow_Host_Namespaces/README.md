@@ -119,9 +119,11 @@ data:
   falco-kyverno-rules.yaml: |-
     - rule: Container Running with Host PID or Network
       desc: Detects a running container whose pod uses host PID or network namespace.
+      source: syscall
       condition: >
-        spawned_process and container and
-        (k8s.pod.host_pid=true or k8s.pod.host_network=true)
+        evt.type in (execve, execveat) and evt.failed = false
+        and container
+        and (k8s.pod.host_pid=true or k8s.pod.host_network=true)
       output: >
         Container running with host namespace (user=%user.name pod=%k8s.pod.name
         ns=%k8s.ns.name image=%container.image.repository
@@ -141,7 +143,7 @@ This policy prevents container breakout to host namespaces:
 
 ### Falco Rule Manifest Explanation
 The Falco check catches namespace sharing at runtime:
-- **`spawned_process and container`**: Triggers whenever a new process is spawned within a container context.
+- **`evt.type in (execve, execveat) and evt.failed = false and container`**: Triggers whenever a new process is successfully spawned within a container context.
 - **`k8s.pod.host_pid=true or k8s.pod.host_network=true`**: Uses Kubernetes metadata enrichment to check if the pod shares host PID or Network namespaces, firing a `CRITICAL` alert containing `hostpid` and `hostnetwork` metadata values.
 
 ---

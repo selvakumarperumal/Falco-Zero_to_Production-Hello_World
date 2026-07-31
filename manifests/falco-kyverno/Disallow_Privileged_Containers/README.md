@@ -70,8 +70,8 @@ data:
       desc: Detects a container spawned with host privileged mode enabled.
       source: syscall
       condition: >
-        evt.type = execve and
-        container and container.privileged = true
+        evt.type in (execve, execveat) and evt.failed = false
+        and container and container.privileged = true
       output: >
         Privileged container started (user=%user.name pod=%k8s.pod.name
         ns=%k8s.ns.name image=%container.image.repository)
@@ -87,7 +87,7 @@ The Kyverno check enforces a baseline security profile:
 
 ### Falco Rule Manifest Explanation
 The runtime rule acts as a core security check:
-- **`container_started and container`**: Listens for runtime container initialization.
+- **`evt.type in (execve, execveat) and evt.failed = false and container`**: Listens for successful process execution inside a container.
 - **`container.privileged = true`**: Assesses container status from container runtime metadata. If the container was somehow started with privileged flags enabled, Falco triggers a `CRITICAL` alert.
 
 ## Test Scenarios & Manifest Examples

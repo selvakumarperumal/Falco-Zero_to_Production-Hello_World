@@ -60,7 +60,7 @@ data:
 ## Detailed Explanation
 ### Falco Rule Manifest Explanation
 This rule detects attempts to establish interactive terminal control:
-- **`spawned_process and container`**: Listens for process execution inside a container.
+- **`evt.type in (execve, execveat) and evt.failed = false and container`**: Listens for successful process execution inside a container.
 - **`proc.name in (nc, ncat, netcat, nmap, socat)`**: Tracks execution of network redirectors.
 - **`proc.cmdline contains "/dev/tcp/"`**: Detects bash socket redirectors.
 - **`proc.cmdline contains "socket"` / `"TCPSocket"` / `"fsockopen"`**: Detects socket creation one-liners in common scripting languages (Python, Perl, Ruby, PHP). Any match triggers a `CRITICAL` alert.

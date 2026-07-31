@@ -12,11 +12,12 @@ data:
     - rule: Unexpected Shell in Hello World Pod
       desc: >
         Detects an interactive shell spawned inside the hello-world pod.
+      source: syscall
       condition: >
-        spawned_process and
-        container and
-        k8s.pod.name = "hello-world" and
-        proc.name in (bash, sh, zsh)
+        evt.type in (execve, execveat) and evt.failed = false
+        and container
+        and k8s.pod.name = "hello-world"
+        and proc.name in (bash, sh, zsh)
       output: >
         Shell spawned in hello-world pod (user=%user.name command=%proc.cmdline
         pod=%k8s.pod.name container=%container.id image=%container.image.repository)
