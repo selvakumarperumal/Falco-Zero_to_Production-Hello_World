@@ -52,11 +52,29 @@ spec:
 ```
 
 ## Detailed Explanation
-### Kyverno Policy Manifest Explanation
-The validation enforces standard labelling requirements:
-- **`validationActions`**: Set to `Deny` to block non-compliant requests at admission time.
-- **`validate.pattern.metadata.labels`**:
-  - `app.kubernetes.io/name: "?*"`: Evaluates labels. The `?*` pattern means the label must be present and contain at least one character.
+
+### Kyverno CEL Expression Breakdown
+
+```
+has(object.metadata.labels) &&
+'app.kubernetes.io/name' in object.metadata.labels &&
+object.metadata.labels['app.kubernetes.io/name'] != ''
+```
+
+| CEL Fragment | What It Does | Why It's Needed |
+|---|---|---|
+| `has(object.metadata.labels)` | Checks if the `labels` map exists under `metadata`. | Prevents null pointer error if a resource is created without any labels map. |
+| `'app.kubernetes.io/name' in object.metadata.labels` | Checks if the required label key `app.kubernetes.io/name` exists in the labels map. | Verifies the standard label key is present. |
+| `object.metadata.labels['app.kubernetes.io/name'] != ''` | Checks that the value associated with `app.kubernetes.io/name` is non-empty. | Rejects manifests that include the key but set an empty string value (e.g. `app.kubernetes.io/name: ""`). |
+
+---
+
+### ℹ️ Why There Is No Falco Companion Rule
+
+Labels are pure Kubernetes API object **metadata**. They exist solely in the Kubernetes API server / etcd database to categorize and filter resources.
+
+* **No Syscall Representation**: There is no Linux kernel syscall or runtime process event associated with Kubernetes resource labels.
+* **Admission Control Control**: Label enforcement is strictly an admission-time metadata concern handled by Kyverno during `CREATE` and `UPDATE` operations.
 
 ## Test Scenarios & Manifest Examples
 

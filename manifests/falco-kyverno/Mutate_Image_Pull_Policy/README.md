@@ -65,12 +65,43 @@ spec:
 ```
 
 ## Detailed Explanation
-### Kyverno Policy Manifest Explanation
-The policy alters configurations automatically:
-- **`rules[0].mutate.patchStrategicMerge`**: Configures an inline strategic merge patch.
-- **`spec.containers`**: Iterates through containers.
-- **`(image): "*:latest"`**: In Kyverno, parenthesis on a field represent a conditional check or anchor. This rule only modifies containers where the image tag ends in `latest`.
-- **`imagePullPolicy: "Always"`**: The mutation patch sets the image pull policy to Always for the matched containers.
+
+### Kyverno CEL Expression Breakdown
+
+```yaml
+Object{
+  spec: Object.spec{
+    containers: object.spec.containers.map(c,
+      c.image.endsWith(':latest') || !c.image.contains(':') ?
+        Object.spec.containers{
+          name: c.name,
+          imagePullPolicy: 'Always'
+        } :
+        Object.spec.containers{
+          name: c.name
+        }
+    )
+  }
+}
+```
+
+| CEL Fragment | What It Does | Why It's Needed |
+|---|---|---|
+| `patchType: ApplyConfiguration` | Applies mutations using Server-Side Apply structure. | Safely updates fields without JSONPatch index errors. |
+| `object.spec.containers.map(c, ...)` | Maps over each container in `object.spec.containers`. | Evaluates image strings for all containers in pod. |
+| `c.image.endsWith(':latest')` | Checks if image tag ends with `:latest`. | Target condition 1: explicit latest tag. |
+| `!c.image.contains(':')` | Checks if image reference contains no tag separator `:`. | Target condition 2: untagged image (implicitly latest). |
+| `? Object.spec.containers{ name: c.name, imagePullPolicy: 'Always' }` | True branch: sets `imagePullPolicy` to `'Always'`. | Ensures container runtime pulls latest image from registry on every pod start. |
+| `: Object.spec.containers{ name: c.name }` | False branch: preserves original container spec. | Leaves explicit version-tagged images unaffected. |
+
+---
+
+### ℹ️ Why There Is No Falco Companion Rule
+
+Image pull policy mutation is an admission-time modification of the Kubernetes Pod specification before pod creation.
+
+* **Handled by Admission**: Kyverno mutates the spec so the kubelet runtime enforces `imagePullPolicy: Always`.
+* **Runtime Detection Covered**: Detecting `:latest` images running at runtime is already covered by the companion rule in [Disallow Latest Tag](../Disallow_Latest_Tag/README.md).
 
 ## Test Scenarios & Manifest Examples
 

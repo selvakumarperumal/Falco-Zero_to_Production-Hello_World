@@ -104,11 +104,67 @@ data:
 
 ## Detailed Explanation
 
-### Kyverno Policy Explanation
-The policy uses modern **Kyverno v1.15+ CEL-based `MutatingPolicy`**:
-- **`matchConstraints`**: Intercepts Pod creation and update operations.
-- **`patchType: ApplyConfiguration`**: Uses Kubernetes CEL object initialization syntax (`Object{spec: Object.spec{...}}`) to merge resource requests safely.
-- **CEL Expression**: Maps through each container (`object.spec.containers.map(c, ...)`). If a container lacks `c.resources` or `c.resources.requests`, it dynamically injects `"cpu": "100m"` and `"memory": "128Mi"`.
+### Kyverno CEL Expression Breakdown
+
+```yaml
+Object{
+  spec: Object.spec{
+    containers: object.spec.containers.map(c,
+      !has(c.resources) || !has(c.resources.requests) ?
+        Object.spec.containers{
+          name: c.name,
+          resources: Object.spec.containers.resources{
+            requests: {
+              "cpu": "100m",
+              "memory": "128Mi"
+            }
+          }
+        } :
+        Object.spec.containers{
+          name: c.name
+        }
+    )
+  }
+}
+```
+
+| CEL Fragment | What It Does | Why It's Needed |
+|---|---|---|
+| `patchType: ApplyConfiguration` | Uses Server-Side Apply syntax (`Object{...}`) to mutate resources. | Ensures clean merge without JSON patch positional pointer fragility. |
+| `object.spec.containers.map(c, ...)` | CEL list transform macro: maps each container `c` to a mutated representation. | Evaluates and mutates every container defined in the pod spec. |
+| `!has(c.resources) \|\| !has(c.resources.requests)` | Checks if `resources` block or `resources.requests` is missing. | Identifies containers that lack defined CPU/memory requests. |
+| `? Object.spec.containers{ ... }` | Ternary true-branch: constructs patch inserting `cpu: 100m` and `memory: 128Mi`. | Injects default baseline CPU and memory requests. |
+| `: Object.spec.containers{ name: c.name }` | Ternary false-branch: leaves container unchanged (only name target preserved). | Preserves existing user-defined resource requests without modification. |
+
+---
+
+### Falco Condition Breakdown
+
+```
+evt.type = execve and container
+and not k8s.ns.name in (kube-system, kyverno, falco)
+```
+
+| Falco Field | What It Does | Why It's Included |
+|---|---|---|
+| `evt.type = execve` | Intercepts process execution syscalls. | Detects process execution inside containers. |
+| `container` | Ensures event originates inside container context. | Filters out host node system processes. |
+| `not k8s.ns.name in (kube-system, kyverno, falco)` | Excludes system and control plane namespaces. | System namespaces often run unconstrained or specialized daemons. |
+
+---
+
+### 🔗 Defense-in-Depth: How Kyverno and Falco Work Together
+
+| Layer | When It Acts | What It Catches |
+|---|---|---|
+| **Kyverno** (Admission) | At pod creation/update | Automatically mutates Pod specs missing resource requests, injecting `100m` CPU and `128Mi` memory defaults. |
+| **Falco** (Runtime) | When a process starts | Monitors processes in non-system namespaces to alert on unconstrained containers running at runtime. |
+
+### MITRE ATT&CK Mapping
+
+| Tag | Technique | Description |
+|---|---|---|
+| `mitre_resource_hijacking` | **T1496 — Resource Hijacking** | Unconstrained containers allow attackers or runaway processes to consume excessive node CPU and memory. |
 
 ---
 

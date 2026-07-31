@@ -80,15 +80,92 @@ data:
 ```
 
 ## Detailed Explanation
-### Kyverno Policy Manifest Explanation
-The Kyverno check enforces a baseline security profile:
-- **`validationActions`**: Set to `Deny` to block non-compliant requests at admission time.
-- **`privileged: "false"`**: Checks container, initContainer, and ephemeralContainer profiles. Rejects any manifest that sets the `privileged` attribute to `true`.
 
-### Falco Rule Manifest Explanation
-The runtime rule acts as a core security check:
-- **`evt.type in (execve, execveat) and evt.failed = false and container`**: Listens for successful process execution inside a container.
-- **`container.privileged = true`**: Assesses container status from container runtime metadata. If the container was somehow started with privileged flags enabled, Falco triggers a `CRITICAL` alert.
+### Kyverno CEL Expression Breakdown
+
+The validation expression must return `true` for the pod to be admitted. It checks three container arrays:
+
+```
+!object.spec.containers.exists(c, has(c.securityContext) && has(c.securityContext.privileged) && c.securityContext.privileged == true) &&
+!object.spec.?initContainers.orValue([]).exists(c, has(c.securityContext) && has(c.securityContext.privileged) && c.securityContext.privileged == true) &&
+!object.spec.?ephemeralContainers.orValue([]).exists(c, has(c.securityContext) && has(c.securityContext.privileged) && c.securityContext.privileged == true)
+```
+
+| CEL Fragment | What It Does | Why It's Needed |
+|---|---|---|
+| `object.spec.containers` | Accesses the list of main containers in the pod spec. | Every pod has at least one main container — this is the primary check target. |
+| `.exists(c, ...)` | CEL list macro: returns `true` if **at least one** element `c` satisfies the inner predicate. | We need to find if *any* container in the list has `privileged: true`. |
+| `!...exists(...)` | Negates the result — the overall expression returns `true` only if **no** container matches the predicate. | Kyverno requires the expression to return `true` to admit the pod, so we negate "any container is privileged" to mean "no container is privileged." |
+| `has(c.securityContext)` | Checks if the `securityContext` field exists on the container. | If the field is missing entirely, accessing `.privileged` on it would cause a CEL evaluation error. `has()` guards against this. |
+| `has(c.securityContext.privileged)` | Checks if the `privileged` field exists within `securityContext`. | The `privileged` field is optional in Kubernetes — it defaults to `false` when omitted. We must check existence before comparing its value. |
+| `c.securityContext.privileged == true` | Compares the actual value of the `privileged` field. | This is the core security check — if `privileged` is explicitly set to `true`, the container has full host access. |
+| `object.spec.?initContainers.orValue([])` | Safe optional field access: if `initContainers` is absent, returns an empty list `[]` instead of erroring. | Pods are not required to have init containers. The `?` operator combined with `.orValue([])` prevents a null reference error on pods without init containers. |
+| `object.spec.?ephemeralContainers.orValue([])` | Same pattern for ephemeral (debug) containers. | Ephemeral containers can be added to running pods via `kubectl debug`. They must also be checked for `privileged: true`. |
+
+#### CEL Evaluation Trace — Pod with `privileged: true` on Main Container
+
+```
+Step 1: object.spec.containers.exists(c, has(c.securityContext) && ...)
+        → c = {name: "app", securityContext: {privileged: true}}
+        → has(c.securityContext) = true
+        → has(c.securityContext.privileged) = true
+        → c.securityContext.privileged == true → true
+        → exists returns true
+Step 2: !true = false  ← First clause fails
+Step 3: Overall expression = false → DENIED
+```
+
+#### CEL Evaluation Trace — Pod with No `securityContext`
+
+```
+Step 1: object.spec.containers.exists(c, has(c.securityContext) && ...)
+        → c = {name: "app", image: "nginx:1.25"}
+        → has(c.securityContext) = false
+        → Short-circuit: false && ... = false
+        → exists returns false (no container matches)
+Step 2: !false = true  ← First clause passes
+Step 3: (initContainers/ephemeralContainers also pass)
+Step 4: Overall expression = true → ADMITTED
+```
+
+---
+
+### Falco Condition Breakdown
+
+```
+evt.type in (execve, execveat) and evt.failed = false
+and container and container.privileged = true
+```
+
+| Falco Field | What It Does | Why It's Included |
+|---|---|---|
+| `evt.type in (execve, execveat)` | Matches the Linux syscalls used to execute a new program. `execve` is the standard exec syscall; `execveat` is the directory-relative variant. | These are the only syscalls that start new processes — by filtering on them, the rule fires exactly once per process execution, not on every syscall the process makes. |
+| `evt.failed = false` | Only matches **successful** exec calls (return code ≥ 0). | Failed exec attempts (e.g., binary not found) are not security-relevant — we only care about processes that actually started. |
+| `container` | Falco built-in macro that evaluates to `true` when the event originates inside a container context (not the host). | Without this filter, the rule would fire for host-level processes too, which are expected to run with elevated privileges (e.g., `kubelet`). |
+| `container.privileged = true` | Checks the container runtime metadata (from containerd/CRI-O) to determine if the container was started with the `--privileged` flag. | This is the core detection — if a privileged container exists at runtime, it means either Kyverno was bypassed or is running in Audit mode. |
+
+---
+
+### 🔗 Defense-in-Depth: How Kyverno and Falco Work Together
+
+| Layer | When It Acts | What It Catches |
+|---|---|---|
+| **Kyverno** (Admission) | Before the pod is created in the cluster | Blocks any pod manifest with `privileged: true` at the API server level — the pod never gets scheduled. |
+| **Falco** (Runtime) | After the container is already running on a node | Detects privileged containers that bypassed admission control. |
+
+**When would the Falco rule fire if Kyverno is active?**
+- Kyverno is in **Audit** mode (logging violations but not blocking).
+- Kyverno was **temporarily down** (webhook failure policy set to `Ignore`).
+- A controller with **elevated RBAC** created pods directly, bypassing the webhook.
+- An operator used `--validate=false` or applied resources via a **static pod manifest** on the node (not through the API server).
+
+> If the Falco rule fires while Kyverno is in `Enforce` mode, it indicates a serious security incident — something bypassed the admission layer entirely.
+
+### MITRE ATT&CK Mapping
+
+| Tag | Technique | Description |
+|---|---|---|
+| `mitre_privilege_escalation` | **T1611 — Escape to Host** | A privileged container can escape to the host by accessing `/dev`, loading kernel modules, or using `nsenter` to enter host namespaces. |
 
 ## Test Scenarios & Manifest Examples
 

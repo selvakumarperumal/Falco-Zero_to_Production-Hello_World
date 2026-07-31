@@ -87,14 +87,96 @@ data:
 ```
 
 ## Detailed Explanation
-### Kyverno Policy Manifest Explanation
-The policy locks down OS-level capabilities:
-- **`validations[].expression`**: CEL expression evaluated against `object.spec` containers.
-- **`validations[].expression`**: CEL validation rules enforcing compliance.
 
-### Falco Rule Manifest Explanation
-The runtime rule monitors execution of kernel manipulation commands:
-- **`proc.name in (nsenter, unshare)` or `proc.cmdline contains "capsh"`**: Detects processes targeting kernel namespaces or capability configuration. If an attacker gains command access inside a container and tries to execute these binaries, Falco flags it as a `WARNING`.
+### Kyverno CEL Expression Breakdown
+
+```
+object.spec.containers.all(c,
+  has(c.securityContext) &&
+  has(c.securityContext.capabilities) &&
+  has(c.securityContext.capabilities.drop) &&
+  c.securityContext.capabilities.drop.exists(x, x == 'ALL')
+)
+```
+
+| CEL Fragment | What It Does | Why It's Needed |
+|---|---|---|
+| `object.spec.containers.all(c, ...)` | CEL list macro: every container must satisfy the predicate. | All containers must drop all capabilities — one container retaining capabilities creates a privilege escalation path. |
+| `has(c.securityContext)` | Checks if `securityContext` exists on the container. | Guards against null reference. |
+| `has(c.securityContext.capabilities)` | Checks if the `capabilities` block exists. | The `capabilities` field is optional — if absent, the container gets the default set (which includes dangerous capabilities like `NET_RAW`, `CHOWN`, `SETUID`). |
+| `has(c.securityContext.capabilities.drop)` | Checks if the `drop` list exists within capabilities. | A container can have `capabilities.add` without `capabilities.drop` — we must explicitly verify that capabilities are being dropped. |
+| `c.securityContext.capabilities.drop.exists(x, x == 'ALL')` | CEL list macro: returns `true` if at least one element in the `drop` list equals the string `'ALL'`. | `DROP ALL` is a Linux kernel convention meaning "remove every capability." The `.exists()` macro checks that the `ALL` token is present in the drop list — it may appear alongside specific adds like `NET_BIND_SERVICE`. |
+
+#### Linux Capabilities — What Gets Dropped
+
+When `drop: ["ALL"]` is set, the container loses these capabilities (among others):
+
+| Capability | What It Allows | Risk If Not Dropped |
+|---|---|---|
+| `NET_RAW` | Create raw sockets, send arbitrary packets | ARP spoofing, DNS poisoning, network sniffing |
+| `SYS_ADMIN` | Broad system administration (mount, namespace manipulation) | Container escape via namespace manipulation |
+| `SYS_PTRACE` | Trace and debug other processes | Read memory of other containers on the same node |
+| `CHOWN` | Change file ownership | Modify ownership of sensitive files |
+| `SETUID` / `SETGID` | Change process UID/GID | Escalate from non-root to root |
+| `DAC_OVERRIDE` | Bypass file permission checks | Read/write any file regardless of permissions |
+
+#### CEL Evaluation Trace — Container with `drop: ["ALL"]`
+
+```
+Step 1: has(c.securityContext) → true
+Step 2: has(c.securityContext.capabilities) → true
+Step 3: has(c.securityContext.capabilities.drop) → true
+Step 4: c.securityContext.capabilities.drop = ["ALL"]
+        → .exists(x, x == 'ALL') → x = "ALL", "ALL" == "ALL" → true
+Step 5: .all() returns true → ADMITTED
+```
+
+#### CEL Evaluation Trace — Container with Specific Drops (Not `ALL`)
+
+```
+Step 1-3: has() checks pass
+Step 4: c.securityContext.capabilities.drop = ["NET_RAW", "SYS_ADMIN"]
+        → .exists(x, x == 'ALL') → neither element equals "ALL" → false
+Step 5: Predicate returns false → .all() returns false → DENIED
+```
+
+---
+
+### Falco Condition Breakdown
+
+```
+evt.type in (execve, execveat) and evt.failed = false and container
+and (proc.name = "nsenter" or proc.name = "unshare"
+  or proc.cmdline contains "capsh"
+  or proc.cmdline contains "--cap-add")
+```
+
+| Falco Field | What It Does | Why It's Included |
+|---|---|---|
+| `evt.type in (execve, execveat)` | Matches process execution syscalls. | Standard process start detection. |
+| `evt.failed = false` | Only successful executions. | Failed attempts are not actionable. |
+| `container` | Event must originate inside a container. | Host-level system tools like `nsenter` are used legitimately by `kubelet`. |
+| `proc.name = "nsenter"` | Detects the `nsenter` binary, which enters Linux namespaces. | `nsenter` is the primary tool for container escape — `nsenter --target 1 --mount --uts --ipc --net --pid` enters the host's namespaces. |
+| `proc.name = "unshare"` | Detects the `unshare` binary, which creates new namespaces. | `unshare` can be used to create a new user namespace with elevated capabilities, bypassing capability restrictions. |
+| `proc.cmdline contains "capsh"` | Detects usage of the capabilities shell tool. | `capsh` is used to inspect and manipulate Linux capabilities at runtime — its presence indicates someone is probing or modifying capability sets. |
+| `proc.cmdline contains "--cap-add"` | Detects Docker/containerd commands adding capabilities. | If an attacker has access to the container runtime socket, they could add capabilities to a running or new container. |
+
+---
+
+### 🔗 Defense-in-Depth: How Kyverno and Falco Work Together
+
+| Layer | When It Acts | What It Catches |
+|---|---|---|
+| **Kyverno** (Admission) | At pod creation/update | Blocks pods that don't drop all capabilities in their security context. |
+| **Falco** (Runtime) | When capability-manipulation tools execute | Detects runtime attempts to use or escalate capabilities, even if the pod spec correctly drops them. |
+
+**Key gap Falco covers:** Kyverno ensures capabilities are dropped in the pod spec, but cannot prevent exploitation at runtime. An attacker could exploit a kernel vulnerability to gain capabilities that were dropped, or use `capsh` to inspect what capabilities are actually available. Falco detects these probing/exploitation tools at the syscall level.
+
+### MITRE ATT&CK Mapping
+
+| Tag | Technique | Description |
+|---|---|---|
+| `mitre_privilege_escalation` | **T1611 — Escape to Host** | Linux capabilities like `SYS_ADMIN` and `SYS_PTRACE` are the primary enablers for container escape. Dropping ALL eliminates these vectors. |
 
 ## Test Scenarios & Manifest Examples
 

@@ -60,12 +60,41 @@ data:
 ```
 
 ## Detailed Explanation
-### Falco Rule Manifest Explanation
-The rule monitors syscalls requesting read access to key files:
-- **`evt.is_open_read = true`**: Triggers only when a file open syscall requests read permissions.
-- **`fd.name in (/etc/shadow, /etc/gshadow, /etc/master.passwd)`**: Watches core Unix credential files.
-- **`fd.name endswith ".pem"` or `.key` or `.p12` or `.pfx` or contains `id_rsa`, `id_ed25519`**: Watches private key extensions.
-- **`not proc.name in (sshd, ssh-agent)`**: Exempts SSH demons/agents which have a legitimate need to read keys.
+
+### Falco Condition Breakdown
+
+```yaml
+condition: >
+  evt.type in (open, openat, openat2)
+  and container
+  and evt.is_open_read = true
+  and (fd.name in (/etc/shadow, /etc/gshadow, /etc/master.passwd)
+    or fd.name endswith ".pem"
+    or fd.name endswith ".key"
+    or fd.name endswith ".p12"
+    or fd.name endswith ".pfx"
+    or fd.name contains "id_rsa"
+    or fd.name contains "id_ed25519")
+  and not proc.name in (sshd, ssh-agent)
+```
+
+| Falco Field | What It Does | Why It's Included |
+|---|---|---|
+| `evt.type in (open, openat, openat2)` | Intercepts file open syscalls. | Detects file access attempts in containers. |
+| `container` | Restricts check to container processes. | Ignores host OS file access. |
+| `evt.is_open_read = true` | Evaluates if file open flags include read access (`O_RDONLY` / `O_RDWR`). | Filters out write-only file opens. |
+| `fd.name in (/etc/shadow, ...)` | Checks if file path targets system password/credential files. | Detects access to system hash files. |
+| `fd.name endswith ".pem"` / `".key"` / `".p12"` / `".pfx"` | Checks for private key and certificate file extensions. | Detects TLS/SSL key harvesting. |
+| `fd.name contains "id_rsa"` / `"id_ed25519"` | Checks for SSH private key files. | Detects SSH credential theft. |
+| `not proc.name in (sshd, ssh-agent)` | Excludes legitimate SSH daemon and agent processes. | Prevents false positives from valid SSH services. |
+
+---
+
+### MITRE ATT&CK Mapping
+
+| Tag | Technique | Description |
+|---|---|---|
+| `mitre_credential_access` | **T1003.008 — OS Credential Dumping: /etc/passwd and /etc/shadow** / **T1552.004 — Unsecured Credentials: Private Keys** | Reading shadow files or private keys allows attackers to crack passwords and steal credentials for lateral movement. |
 
 ## Test Scenarios & Manifest Examples
 

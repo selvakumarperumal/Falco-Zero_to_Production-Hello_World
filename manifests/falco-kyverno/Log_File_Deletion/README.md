@@ -56,11 +56,38 @@ data:
 ```
 
 ## Detailed Explanation
-### Falco Rule Manifest Explanation
-The rule targets defense evasion patterns inside containers:
-- **`evt.type in (unlink, unlinkat, rename, renameat)`**: Listens for file deletion (`unlink`) and renaming (`rename`) syscalls.
-- **`fd.name startswith "/var/log/"` or `endswith ".log"` or contains `syslog`, `auth.log`, `history`**: Focuses on files matching typical logging directories, extensions, or system log files.
-- **`not proc.name in (logrotate, journald)`**: Safe lists authorized system processes that naturally truncate or archive logs.
+
+### Falco Condition Breakdown
+
+```yaml
+condition: >
+  evt.type in (unlink, unlinkat, rename, renameat)
+  and container
+  and (fd.name startswith "/var/log/"
+    or fd.name endswith ".log"
+    or fd.name contains "syslog"
+    or fd.name contains "auth.log"
+    or fd.name contains "history")
+  and not proc.name in (logrotate, journald)
+```
+
+| Falco Field | What It Does | Why It's Included |
+|---|---|---|
+| `evt.type in (unlink, unlinkat, rename, renameat)` | Intercepts file deletion (`unlink`/`unlinkat`) and file moving/renaming (`rename`/`renameat`) syscalls. | Detects file removal or masking operations. |
+| `container` | Restricts check to container processes. | Ignores host system log operations. |
+| `fd.name startswith "/var/log/"` | Checks if target file is located inside standard log directory. | Catches deletion of application and system log files. |
+| `fd.name endswith ".log"` | Checks for `.log` file extensions anywhere on container filesystem. | Catches log file deletion outside `/var/log`. |
+| `fd.name contains "syslog"` / `"auth.log"` | Targets critical system audit logs. | Detects destruction of authentication logs. |
+| `fd.name contains "history"` | Targets shell history files (e.g. `.bash_history`). | Detects anti-forensics cleanup of command history. |
+| `not proc.name in (logrotate, journald)` | Excludes legitimate log maintenance utilities. | Prevents false alerts from authorized log rotation. |
+
+---
+
+### MITRE ATT&CK Mapping
+
+| Tag | Technique | Description |
+|---|---|---|
+| `mitre_defense_evasion` | **T1070.002 — Indicator Removal: Clear Linux or Mac System Logs** | Attackers delete log files and shell history to cover their tracks and hinder post-incident forensic investigations. |
 
 ## Test Scenarios & Manifest Examples
 

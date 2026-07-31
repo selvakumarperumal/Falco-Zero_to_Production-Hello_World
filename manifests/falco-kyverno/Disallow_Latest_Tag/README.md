@@ -123,16 +123,74 @@ data:
 
 ## Detailed Explanation
 
-### Kyverno Policy Manifest Explanation
-The Kyverno validation enforces image tag discipline at admission time:
-- **`validationActions: [Deny]`**: Blocks non-compliant pod creation.
-- **CEL Expression**: `containers.all(c, !c.image.endsWith(':latest'))` iterates over all main container specifications, ensuring no image URI ends in `:latest`. Safe handling via `?initContainers.orValue([])` checks init containers if present.
+### Kyverno CEL Expression Breakdown
 
-### Falco Rule Manifest Explanation
-The companion Falco rule detects `:latest` images at container startup:
-- **`evt.type in (execve, execveat) and evt.failed = false and container and proc.vpid = 1`**: Triggers once when a container's first process is initialized by the container runtime.
-- **`container.image.tag = "latest" or container.image.tag = ""`**: Checks if the resolved image tag is explicitly `"latest"` or missing (empty string).
-- **Priority**: `NOTICE` — logs a notification for security and platform engineering teams to track floating tags in running workloads.
+```
+object.spec.containers.all(c, !c.image.endsWith(':latest')) &&
+object.spec.?initContainers.orValue([]).all(c, !c.image.endsWith(':latest'))
+```
+
+| CEL Fragment | What It Does | Why It's Needed |
+|---|---|---|
+| `object.spec.containers.all(c, ...)` | CEL list macro: returns `true` only if **every** container passes the predicate. | Every container in the pod must use a versioned tag — one `:latest` image should block the entire pod. |
+| `c.image.endsWith(':latest')` | String method checking if the image reference ends with the literal `:latest` tag. | The `:latest` tag is mutable — it can point to different image digests over time, making deployments non-reproducible. |
+| `!c.image.endsWith(':latest')` | Negation — the predicate returns `true` only if the image does **not** end with `:latest`. | Kyverno requires `true` to admit; negating ensures `:latest` images are denied. |
+| `object.spec.?initContainers.orValue([])` | Safe optional field access for init containers. | Init containers are optional. `?` with `.orValue([])` returns an empty list if absent, so `.all()` returns `true` (vacuously true for empty lists). |
+| `.all(c, !c.image.endsWith(':latest'))` | Same check applied to init containers. | Init containers with `:latest` tags are equally dangerous — they run before the main containers and can pull stale images. |
+
+> **Note:** This expression does not check for images without any tag (e.g., `nginx` without `:tag`). In Kubernetes, untagged images default to `:latest` at pull time, but the string `nginx` does not end with `:latest`. To catch this, use `!c.image.contains(':')` as an additional check.
+
+#### CEL Evaluation Trace — Image with Explicit Version Tag
+
+```
+Step 1: c.image = "nginx:1.25" → endsWith(':latest') → false
+Step 2: !false = true → container passes
+Step 3: .all() returns true → ADMITTED
+```
+
+#### CEL Evaluation Trace — Image with `:latest` Tag
+
+```
+Step 1: c.image = "nginx:latest" → endsWith(':latest') → true
+Step 2: !true = false → container fails
+Step 3: .all() returns false → DENIED
+```
+
+---
+
+### Falco Condition Breakdown
+
+```
+evt.type in (execve, execveat) and evt.failed = false and container
+and proc.vpid = 1
+and (container.image.tag = "latest" or container.image.tag = "")
+```
+
+| Falco Field | What It Does | Why It's Included |
+|---|---|---|
+| `evt.type in (execve, execveat)` | Matches process execution syscalls. | Standard process start detection. |
+| `evt.failed = false` | Only successful executions. | Filters out failed exec attempts. |
+| `container` | Event must originate inside a container. | Scopes to containerized workloads. |
+| `proc.vpid = 1` | Matches only the container's PID 1 (init process). | Fires exactly once per container start, not for every process inside the container. Without this, the rule would fire repeatedly for every `exec` call. |
+| `container.image.tag = "latest"` | The container runtime's resolved image tag is literally `latest`. | Detects explicitly tagged `:latest` images. |
+| `container.image.tag = ""` | The image tag is empty (untagged image). | Kubernetes resolves untagged images as `:latest` at pull time, but the tag metadata may be empty in the runtime. This catches that case. |
+
+---
+
+### 🔗 Defense-in-Depth: How Kyverno and Falco Work Together
+
+| Layer | When It Acts | What It Catches |
+|---|---|---|
+| **Kyverno** (Admission) | At pod creation/update | Blocks pods with `:latest` in the image string before the pod is scheduled. |
+| **Falco** (Runtime) | When the container's PID 1 process starts | Detects `:latest` or untagged images that are actually running, even if they bypassed admission. |
+
+**Key gap Falco covers:** Kyverno checks the **string** in the pod spec. If a controller mutates the image tag after admission (or a Helm chart resolves to `:latest` via a template variable), Falco catches the actual running container's image tag from runtime metadata.
+
+### MITRE ATT&CK Mapping
+
+| Tag | Technique | Description |
+|---|---|---|
+| `supply_chain` | **T1195.002 — Supply Chain Compromise: Software Supply Chain** | Mutable tags enable supply chain attacks — an attacker who compromises a registry can replace the image behind `:latest` without changing the tag name. |
 
 ---
 

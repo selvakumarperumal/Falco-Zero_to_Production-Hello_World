@@ -136,18 +136,65 @@ data:
 
 ## Detailed Explanation
 
-### Kyverno Policy Manifest Explanation
-This policy prevents mounting host directory structures into containers:
-- **`validationActions`**: Set to `Deny` to block non-compliant workloads at admission time.
-- **CEL Expression**: `!has(object.spec.volumes) || !object.spec.volumes.exists(v, has(v.hostPath))` evaluates each volume definition in the spec. If any volume defines `hostPath`, the expression evaluates to `false` and blocks creation.
-- **`autogen.podControllers`**: Automatically expands the policy to validate pod templates within `Deployments`, `DaemonSets`, `StatefulSets`, `Jobs`, and `CronJobs`.
-- **`validatingAdmissionPolicy.enabled: true`**: Compiles the Kyverno policy into a native Kubernetes `ValidatingAdmissionPolicy` for high-performance in-tree admission checks.
+### Kyverno CEL Expression Breakdown
 
-### Falco Rule Manifest Explanation
-The companion Falco rule detects unauthorized host path access at runtime:
-- **`evt.type in (open, openat, openat2)`**: Intercepts file open syscalls across all Linux file opening mechanisms.
-- **`container and fd.name startswith ...`**: Filters for file descriptors opened inside container environments that point to sensitive host directories.
-- **Priority**: `CRITICAL` — triggers an immediate alert when a container accesses protected host files or sockets.
+```
+!has(object.spec.volumes) || !object.spec.volumes.exists(v, has(v.hostPath))
+```
+
+| CEL Fragment | What It Does | Why It's Needed |
+|---|---|---|
+| `!has(object.spec.volumes)` | Checks if the pod has no `volumes` field defined. | If a pod has no volumes at all, it cannot have hostPath volumes — short-circuits to `true` (admitted). |
+| `\|\|` (OR) | If volumes is missing, admit immediately; otherwise evaluate the volume list. | Prevents evaluation error when `.volumes` is null/omitted. |
+| `object.spec.volumes.exists(v, ...)` | CEL list macro: returns `true` if **at least one** volume `v` contains a `hostPath` field. | Scans all volume definitions in the pod spec. |
+| `has(v.hostPath)` | Checks if the `hostPath` field exists on volume `v`. | Identifies if this specific volume is mounting a directory or file from the host filesystem. |
+| `!...exists(...)` | Negates the result — returns `true` only if **no** volume has a `hostPath`. | Kyverno requires `true` for admission. |
+
+#### CEL Evaluation Trace — Pod with HostPath Volume
+
+```
+Step 1: has(object.spec.volumes) → true
+Step 2: object.spec.volumes.exists(v, has(v.hostPath)) → volume "host-root" has hostPath → true
+Step 3: !true → false
+Step 4: false || false → false → DENIED
+```
+
+---
+
+### Falco Condition Breakdown
+
+```
+evt.type in (open, openat, openat2) and container
+and (fd.name startswith "/etc/shadow"
+  or fd.name startswith "/etc/kubernetes"
+  or fd.name startswith "/var/run/docker.sock"
+  or fd.name startswith "/root/.ssh"
+  or fd.name startswith "/root/.kube")
+```
+
+| Falco Field | What It Does | Why It's Included |
+|---|---|---|
+| `evt.type in (open, openat, openat2)` | Intercepts file open syscalls across all Linux file opening mechanisms. | Detects when a container process attempts to access files. |
+| `container` | Ensures the event originates from inside a container. | Prevents false positives from host processes accessing system files. |
+| `fd.name startswith "/etc/shadow"` | Checks if file descriptor targets `/etc/shadow` (password hashes). | Accessing host credentials from container indicates hostPath abuse. |
+| `fd.name startswith "/etc/kubernetes"` | Targets Kubernetes node configuration and PKI keys. | Protects cluster control plane credentials from container exposure. |
+| `fd.name startswith "/var/run/docker.sock"` | Targets container runtime socket. | Mounting the container socket allows full host takeover and container escape. |
+| `fd.name startswith "/root/.ssh"` / `"/root/.kube"` | Targets root SSH keys or admin kubeconfig files. | Detects credential harvesting via hostPath mounts. |
+
+---
+
+### 🔗 Defense-in-Depth: How Kyverno and Falco Work Together
+
+| Layer | When It Acts | What It Catches |
+|---|---|---|
+| **Kyverno** (Admission) | At pod creation/update | Blocks any pod manifest that defines a `hostPath` volume at admission time. |
+| **Falco** (Runtime) | When a process opens a file | Detects file access to sensitive host paths inside containers if admission controls were bypassed or set to Audit mode. |
+
+### MITRE ATT&CK Mapping
+
+| Tag | Technique | Description |
+|---|---|---|
+| `mitre_credential_access` | **T1003 — OS Credential Dumping** / **T1611 — Escape to Host** | HostPath mounts allow containers to directly read host secrets, sockets, and credential files. |
 
 ---
 

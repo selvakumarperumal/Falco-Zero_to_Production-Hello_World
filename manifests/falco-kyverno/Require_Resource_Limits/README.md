@@ -86,14 +86,82 @@ data:
 ```
 
 ## Detailed Explanation
-### Kyverno Policy Manifest Explanation
-The policy prevents container resource starvation:
-- **`cpu: "?*"` and `memory: "?*"`**: Enforces that both resource limit keys must be set with at least one character, ensuring limits are configured.
 
-### Falco Rule Manifest Explanation
-The companion Falco rule detects compute stress tools running inside containers:
-- **`proc.name in (stress, stress-ng, yes, dd)`**: Listens for process execution of known benchmarking or disk write utilities.
-- **`not k8s.ns.name in (kube-system)`**: Exempts system namespaces to allow standard cluster-level benchmarking.
+### Kyverno CEL Expression Breakdown
+
+```
+object.spec.containers.all(c,
+  has(c.resources) &&
+  has(c.resources.limits) &&
+  has(c.resources.limits.cpu) &&
+  has(c.resources.limits.memory)
+)
+```
+
+| CEL Fragment | What It Does | Why It's Needed |
+|---|---|---|
+| `object.spec.containers.all(c, ...)` | CEL list macro: returns `true` only if **every** container satisfies the predicate. | All containers must have resource limits — even one unlimited container can starve node resources. |
+| `has(c.resources)` | Checks if the `resources` field exists on the container. | The `resources` field is optional in Kubernetes. If it's missing entirely, accessing `.limits` would cause a CEL evaluation error. |
+| `has(c.resources.limits)` | Checks if the `limits` sub-field exists within `resources`. | A container can have `resources.requests` without `resources.limits` — this ensures limits are explicitly defined. |
+| `has(c.resources.limits.cpu)` | Checks if a CPU limit value is specified. | Without a CPU limit, the container can consume all available CPU on the node, starving other pods. |
+| `has(c.resources.limits.memory)` | Checks if a memory limit value is specified. | Without a memory limit, the container can allocate unlimited memory, triggering the Linux OOM killer which may kill other pods. |
+| `&&` (AND chain) | All four `has()` checks must pass for each container. | The chain creates a progressive null-safety check: resources → limits → cpu/memory. Each `has()` guards the next field access. |
+
+> **Note:** This policy only checks that limits **exist** — it does not validate their values. A container with `cpu: "1m"` and `memory: "1Mi"` would pass. To enforce minimum values, add a comparison like `quantity(c.resources.limits.cpu) >= quantity("100m")`.
+
+#### CEL Evaluation Trace — Container with Both Limits
+
+```
+Step 1: has(c.resources) → true (resources field exists)
+Step 2: has(c.resources.limits) → true (limits field exists)
+Step 3: has(c.resources.limits.cpu) → true (cpu: "500m")
+Step 4: has(c.resources.limits.memory) → true (memory: "512Mi")
+Step 5: true && true && true && true = true → container passes
+Step 6: .all() returns true → ADMITTED
+```
+
+#### CEL Evaluation Trace — Container with No Resources
+
+```
+Step 1: has(c.resources) → false
+Step 2: false && ... → SHORT-CIRCUIT (remaining checks skipped)
+Step 3: Predicate returns false → .all() returns false → DENIED
+```
+
+---
+
+### Falco Condition Breakdown
+
+```
+evt.type in (execve, execveat) and evt.failed = false and container
+and proc.name in (stress, stress-ng, yes, dd)
+and not k8s.ns.name in (kube-system)
+```
+
+| Falco Field | What It Does | Why It's Included |
+|---|---|---|
+| `evt.type in (execve, execveat)` | Matches process execution syscalls. | Standard process start detection filter. |
+| `evt.failed = false` | Only successful executions. | We only care about tools that actually started running. |
+| `container` | Event originates inside a container. | Host-level stress testing tools are not relevant to this policy. |
+| `proc.name in (stress, stress-ng, yes, dd)` | Matches known resource abuse tool binaries. `stress` and `stress-ng` are CPU/memory stress testers. `yes` outputs infinite data to consume CPU. `dd` can perform intensive disk I/O. | These tools have no legitimate use in production containers. Their presence strongly indicates either a resource exhaustion attack (DoS) or a crypto mining precursor. |
+| `not k8s.ns.name in (kube-system)` | Excludes kube-system namespace. | System namespaces may legitimately run benchmarking tools for node validation. |
+
+---
+
+### 🔗 Defense-in-Depth: How Kyverno and Falco Work Together
+
+| Layer | When It Acts | What It Catches |
+|---|---|---|
+| **Kyverno** (Admission) | At pod creation/update | Blocks pods without CPU/memory limits — the container can never be scheduled without resource boundaries. |
+| **Falco** (Runtime) | When resource abuse tools execute | Detects active resource exhaustion attacks even in containers that have limits. A container with limits can still run `stress-ng`, just within its cgroup boundaries. |
+
+**Key gap Falco covers:** Kyverno ensures limits exist but can't prevent legitimate containers from being exploited. If an attacker gains code execution inside a container (even one with limits), they can run `stress-ng` to consume the container's full allocation. Falco alerts on the execution of these tools, enabling incident response before the container exhausts its limits or triggers OOM kills.
+
+### MITRE ATT&CK Mapping
+
+| Tag | Technique | Description |
+|---|---|---|
+| `mitre_impact` | **T1499.004 — Endpoint Denial of Service: Application or System Exploitation** | Resource exhaustion tools are used to deny service to other workloads on the same node. |
 
 ## Test Scenarios & Manifest Examples
 

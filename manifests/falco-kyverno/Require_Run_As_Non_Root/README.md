@@ -79,14 +79,80 @@ data:
 ```
 
 ## Detailed Explanation
-### Kyverno Policy Manifest Explanation
-The policy validates the execution context user:
-- **`runAsNonRoot: true`**: Enforces that Kubernetes must check the image configuration (or securityContext) to verify it does not run as user UID 0.
 
-### Falco Rule Manifest Explanation
-The companion Falco rule monitors the active process UID at runtime:
-- **`user.uid = 0`**: Triggers if any process spawns with UID 0 (root).
-- **`not k8s.ns.name in (kube-system, kyverno)`**: Ignores cluster system processes which often require root privileges.
+### Kyverno CEL Expression Breakdown
+
+```
+(has(object.spec.securityContext) && has(object.spec.securityContext.runAsNonRoot) && object.spec.securityContext.runAsNonRoot == true) ||
+object.spec.containers.all(c, has(c.securityContext) && has(c.securityContext.runAsNonRoot) && c.securityContext.runAsNonRoot == true)
+```
+
+This expression uses an **OR** (`||`) pattern — the pod passes if `runAsNonRoot: true` is set at **either** the pod level or on **every** individual container:
+
+| CEL Fragment | What It Does | Why It's Needed |
+|---|---|---|
+| `has(object.spec.securityContext)` | Checks if the pod-level `securityContext` exists. | Guards against null reference — if no pod-level security context exists, we skip to the container-level check. |
+| `has(object.spec.securityContext.runAsNonRoot)` | Checks if the `runAsNonRoot` field exists within the pod security context. | The field is optional — it defaults to `false` when omitted. We must verify it exists before comparing. |
+| `object.spec.securityContext.runAsNonRoot == true` | Verifies the pod-level `runAsNonRoot` is explicitly set to `true`. | When set at the pod level, it applies to all containers in the pod as a default. This is the preferred configuration. |
+| `\|\|` (OR operator) | If the pod-level check passes, the expression short-circuits to `true` without checking individual containers. | Allows two valid configuration patterns: pod-level setting (applies to all containers) or per-container settings. |
+| `object.spec.containers.all(c, ...)` | CEL list macro: returns `true` only if **every** container `c` satisfies the predicate. | If the pod-level setting is absent, every container must individually set `runAsNonRoot: true`. |
+| `has(c.securityContext) && has(c.securityContext.runAsNonRoot)` | Guards against missing fields at the container level. | Same null-safety pattern as the pod-level check — prevents CEL evaluation errors on containers without a security context. |
+
+#### CEL Evaluation Trace — Pod-Level `runAsNonRoot: true`
+
+```
+Step 1: has(object.spec.securityContext) → true
+Step 2: has(object.spec.securityContext.runAsNonRoot) → true
+Step 3: object.spec.securityContext.runAsNonRoot == true → true
+Step 4: Left side of || = true → SHORT-CIRCUIT → ADMITTED
+        (container-level check is never evaluated)
+```
+
+#### CEL Evaluation Trace — No `runAsNonRoot` Anywhere
+
+```
+Step 1: has(object.spec.securityContext) → false
+Step 2: Left side of || = false → evaluate right side
+Step 3: object.spec.containers.all(c, has(c.securityContext) && ...) 
+        → c = {name: "app"} → has(c.securityContext) = false → false
+        → all returns false (not all containers pass)
+Step 4: false || false = false → DENIED
+```
+
+---
+
+### Falco Condition Breakdown
+
+```
+evt.type in (execve, execveat) and evt.failed = false and container
+and user.uid = 0
+and not k8s.ns.name in (kube-system, kyverno)
+```
+
+| Falco Field | What It Does | Why It's Included |
+|---|---|---|
+| `evt.type in (execve, execveat)` | Matches process execution syscalls. | Fires once per new process — detects the moment a root-UID process starts inside a container. |
+| `evt.failed = false` | Only successful process executions. | Failed exec calls don't pose a security risk. |
+| `container` | Event must originate inside a container. | Host processes often run as root legitimately (kubelet, containerd). |
+| `user.uid = 0` | The process's effective user ID is root. | This is the core detection — even if `runAsNonRoot` was set, the image might have `USER root` in its Dockerfile, or a process might use `setuid` to escalate. |
+| `not k8s.ns.name in (kube-system, kyverno)` | Excludes system namespaces. | System components (kube-proxy, CoreDNS, Kyverno itself) legitimately run as root. Alerting on them would create noise. |
+
+---
+
+### 🔗 Defense-in-Depth: How Kyverno and Falco Work Together
+
+| Layer | When It Acts | What It Catches |
+|---|---|---|
+| **Kyverno** (Admission) | At pod creation/update | Blocks pods that don't explicitly set `runAsNonRoot: true` — but cannot verify the container image's actual USER directive. |
+| **Falco** (Runtime) | When a process executes | Detects **actual** root-UID execution, catching cases where `runAsNonRoot: true` is set but the image's entrypoint still runs as root (Kubernetes will reject these too, but only at container start, not at admission). |
+
+**Key gap Falco covers:** Kyverno validates the *intent* (the `runAsNonRoot` field), but Falco validates the *reality* (actual UID at runtime). A container could have `runAsNonRoot: true` but use a `setuid` binary to escalate to UID 0 after startup — only Falco catches this.
+
+### MITRE ATT&CK Mapping
+
+| Tag | Technique | Description |
+|---|---|---|
+| `mitre_privilege_escalation` | **T1611 — Escape to Host** | Running as root inside a container is a prerequisite for most container escape exploits (Dirty Pipe, Leaky Vessels). |
 
 ## Test Scenarios & Manifest Examples
 

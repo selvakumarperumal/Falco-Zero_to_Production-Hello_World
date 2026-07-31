@@ -68,15 +68,35 @@ data:
 ```
 
 ## Detailed Explanation
-### Falco Rule Manifest Explanation
-The rule captures runtime cryptocurrency hijacking behavior:
-- **`list: crypto_mining_processes`**: Defines a list of known crypto mining executable names (like `xmrig`, `minerd`).
-- **`condition`**: Triggers when all the following evaluate to true:
-  - `evt.type in (execve, execveat) and evt.failed = false`: A successful program/process execution event (syscalls `execve` or `execveat`).
-  - `container`: The event originates inside a container (not the host).
-  - The process name (`proc.name`) is in the `crypto_mining_processes` list OR the command line (`proc.cmdline`) contains stratum protocols (`stratum+tcp://`, `stratum+ssl://`) or miner algorithms (`cryptonight`, `randomx`).
-- **`output`**: Details the command, pod, namespace, image, and executing user.
-- **`priority: CRITICAL`**: Marks it as a critical severity incident, as cryptojacking consumes extensive CPU resources and billings.
+
+### Falco Condition Breakdown
+
+```yaml
+condition: >
+  evt.type in (execve, execveat) and evt.failed = false and container
+  and (proc.name in (crypto_mining_processes)
+    or proc.cmdline contains "stratum+tcp://"
+    or proc.cmdline contains "stratum+ssl://"
+    or proc.cmdline icontains "cryptonight"
+    or proc.cmdline icontains "randomx")
+```
+
+| Falco Field | What It Does | Why It's Included |
+|---|---|---|
+| `evt.type in (execve, execveat)` | Intercepts process creation syscalls. | Detects the moment a mining process starts. |
+| `evt.failed = false` | Ensures process execution completed successfully. | Ignores failed process executions. |
+| `container` | Restricts detection to container environments. | Filters out host node processes. |
+| `proc.name in (crypto_mining_processes)` | Checks executable name against list (`xmrig`, `minerd`, `cgminer`, etc.). | Identifies known crypto mining binary names. |
+| `proc.cmdline contains "stratum+tcp://"` | Inspects command line arguments for Stratum mining protocol endpoints. | Catches miners renamed to obscure names (e.g., `app`) running with stratum pool parameters. |
+| `proc.cmdline icontains "cryptonight"` / `"randomx"` | Case-insensitive match on popular mining algorithms in command arguments. | Detects miner execution based on mining algorithm configuration. |
+
+---
+
+### MITRE ATT&CK Mapping
+
+| Tag | Technique | Description |
+|---|---|---|
+| `mitre_resource_hijacking` | **T1496 — Resource Hijacking** | Attackers hijack container CPU/GPU compute power to mine cryptocurrency, degrading application performance and inflating infrastructure costs. |
 
 ## Test Scenarios & Manifest Examples
 

@@ -56,15 +56,36 @@ spec:
 
 ## Detailed Explanation
 
-### CEL Expression Breakdown
-```
-object.status.phase == 'Failed'
-```
-- `object.status.phase` — Kubernetes Pod phase field (values: `Pending`, `Running`, `Succeeded`, `Failed`, `Unknown`).
-- Simple equality check: deletes only pods that have definitively failed.
+### Kyverno CEL DeletingPolicy Breakdown
 
-### Cron Schedule
-`0 */6 * * *` — Runs at minute 0 of every 6th hour (00:00, 06:00, 12:00, 18:00 UTC).
+```yaml
+spec:
+  schedule: '0 */6 * * *'
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ['']
+        apiVersions: ['v1']
+        resources: ['pods']
+  conditions:
+    - name: is-failed
+      expression: "object.status.phase == 'Failed'"
+```
+
+| Field / CEL Fragment | What It Does | Why It's Needed |
+|---|---|---|
+| `kind: DeletingPolicy` | Kyverno policy type for cron-based background cleanup. | Executes periodic checks on matching cluster objects. |
+| `schedule: '0 */6 * * *'` | Cron schedule expression (runs every 6 hours). | Regularly purges accumulated failed Pod objects. |
+| `object.status.phase` | Reads the high-level Pod lifecycle phase field (`Pending`, `Running`, `Succeeded`, `Failed`, `Unknown`). | Identifies the lifecycle state of the pod object. |
+| `object.status.phase == 'Failed'` | CEL equality comparison matching the literal string `'Failed'`. | Matches Pods in Failed phase (e.g. OOMKilled, evicted, exited with non-zero status). |
+
+---
+
+### ℹ️ Why There Is No Falco Companion Rule
+
+Deleting stale Failed Pod objects is a cluster hygiene operation managed by Kyverno's cleanup controller.
+
+* **Administrative Hygiene**: Removes dead etcd Pod objects to free up object quota and reduce noise.
+* **Runtime Crash Monitoring Covered**: Monitoring runtime process crashes and exit behaviors is handled by [Require Pod Probes](../Require_Pod_Probes/README.md).
 
 ---
 

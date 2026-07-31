@@ -58,12 +58,37 @@ data:
 ```
 
 ## Detailed Explanation
-### Falco Rule Manifest Explanation
-This rule detects attempts to establish interactive terminal control:
-- **`evt.type in (execve, execveat) and evt.failed = false and container`**: Listens for successful process execution inside a container.
-- **`proc.name in (nc, ncat, netcat, nmap, socat)`**: Tracks execution of network redirectors.
-- **`proc.cmdline contains "/dev/tcp/"`**: Detects bash socket redirectors.
-- **`proc.cmdline contains "socket"` / `"TCPSocket"` / `"fsockopen"`**: Detects socket creation one-liners in common scripting languages (Python, Perl, Ruby, PHP). Any match triggers a `CRITICAL` alert.
+
+### Falco Condition Breakdown
+
+```yaml
+condition: >
+  evt.type in (execve, execveat) and evt.failed = false and container
+  and (proc.name in (nc, ncat, netcat, nmap, socat)
+    or (proc.name = "bash" and proc.cmdline contains "/dev/tcp/")
+    or (proc.name = "python" and proc.cmdline contains "socket")
+    or (proc.name = "python3" and proc.cmdline contains "socket")
+    or (proc.name = "perl" and proc.cmdline contains "socket")
+    or (proc.name = "ruby" and proc.cmdline contains "TCPSocket")
+    or (proc.name = "php" and proc.cmdline contains "fsockopen"))
+```
+
+| Falco Field | What It Does | Why It's Included |
+|---|---|---|
+| `evt.type in (execve, execveat)` | Intercepts process execution syscalls. | Triggers check when a process starts inside container. |
+| `evt.failed = false` | Filters for successful executions. | Ignores failed process executions. |
+| `container` | Restricts check to container processes. | Ignores host system network utilities. |
+| `proc.name in (nc, ncat, netcat, nmap, socat)` | Matches network relay and raw socket tool binary names. | Detects execution of tools commonly used for reverse shell connections. |
+| `proc.name = "bash" and ... "/dev/tcp/"` | Detects native Bash pseudo-device TCP socket redirections. | Identifies bash-based reverse shell one-liners (`bash -i >& /dev/tcp/...`). |
+| `proc.name in (python, python3, perl, ruby, php) and ...` | Detects socket opening commands executed via scripting language interpreters. | Identifies script-based reverse shells (e.g. Python `socket.socket()`, Perl/Ruby/PHP socket one-liners). |
+
+---
+
+### MITRE ATT&CK Mapping
+
+| Tag | Technique | Description |
+|---|---|---|
+| `mitre_command_and_control` | **T1059 — Command and Scripting Interpreter** / **T1095 — Non-Application Layer Protocol** | Reverse shells establish an outbound command and control channel from the compromised container back to the attacker. |
 
 ## Test Scenarios & Manifest Examples
 

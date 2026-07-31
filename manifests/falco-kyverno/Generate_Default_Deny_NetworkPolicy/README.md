@@ -99,18 +99,75 @@ data:
 ```
 
 ## Detailed Explanation
-### Kyverno Policy Manifest Explanation
-Kyverno generates zero-trust networking templates automatically:
-- **`kinds: [Namespace]`**: Fires when a Namespace is created.
-- **`generate.kind: NetworkPolicy`**: Creates a NetworkPolicy object.
-- **`synchronize: true`**: Syncs policy configuration. If the template changes, Kyverno updates it across namespaces.
-- **`data`**: Declares a default-deny policy (empty `podSelector` and both `Ingress` and `Egress` policyTypes).
 
-### Falco Rule Manifest Explanation
-The runtime rule detects outbound network traversal:
-- **`evt.type = connect`**: Fires on completed outbound TCP/UDP connection requests.
-- **`fd.typechar = 4`**: Restricts targeting to IPv4 connections.
-- **`not fd.sip in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")`**: Ignores cluster private IP blocks. A connection to any public IP fires a `WARNING` alert indicating potential exfiltration.
+### Kyverno CEL / GeneratingPolicy Breakdown
+
+```yaml
+variables:
+  - name: nsName
+    expression: 'object.metadata.name'
+  - name: downstream
+    expression: >-
+      [
+        {
+          "apiVersion": dyn("networking.k8s.io/v1"),
+          "kind": dyn("NetworkPolicy"),
+          "metadata": dyn({
+            "name": "default-deny-all",
+            "namespace": string(variables.nsName)
+          }),
+          "spec": dyn({
+            "podSelector": dyn({}),
+            "policyTypes": dyn(["Ingress", "Egress"])
+          })
+        }
+      ]
+generate:
+  - expression: generator.Apply(variables.nsName, variables.downstream)
+```
+
+| CEL Fragment | What It Does | Why It's Needed |
+|---|---|---|
+| `object.metadata.name` | Extracts the name of the newly created Namespace trigger object. | Dynamically scopes downstream generated NetworkPolicy to the target namespace. |
+| `dyn(...)` | Dynamic type wrapper for CEL expressions constructing Kubernetes resource manifests. | Required when building unstructured map structures inside CEL generator policies. |
+| `"podSelector": dyn({})` | Empty pod selector `{}`. | Selects **all** pods in the target namespace. |
+| `"policyTypes": dyn(["Ingress", "Egress"])` | Enables both Ingress and Egress policy enforcement. | Blocks all unexplicitly allowed inbound and outbound network traffic (zero-trust baseline). |
+| `generator.Apply(...)` | Kyverno CEL generator function to create/reconcile downstream resource. | Automatically creates `NetworkPolicy/default-deny-all` in target namespace and keeps it synced. |
+
+---
+
+### Falco Condition Breakdown
+
+```
+evt.type = connect and container and fd.typechar = 4
+and fd.ip != "0.0.0.0"
+and not fd.sip in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+and not k8s.ns.name in (kube-system, kyverno)
+```
+
+| Falco Field | What It Does | Why It's Included |
+|---|---|---|
+| `evt.type = connect` | Matches outgoing network socket connection requests. | Detects active outbound network connections. |
+| `container` | Ensures event originates inside a container. | Excludes host node network connections. |
+| `fd.typechar = 4` | Restricts check to IPv4 socket descriptors. | Filters for standard IPv4 network connections. |
+| `fd.ip != "0.0.0.0"` | Ignores wildcard listen/bind IPs. | Focuses on active target connection addresses. |
+| `not fd.sip in ("10.0.0.0/8", ...)` | Excludes internal cluster private IP CIDR ranges. | Connections to public external IPs trigger an alert. |
+| `not k8s.ns.name in (...)` | Excludes system control plane namespaces. | System pods need external connectivity (e.g., API calls, telemetry). |
+
+---
+
+### 🔗 Defense-in-Depth: How Kyverno and Falco Work Together
+
+| Layer | When It Acts | What It Catches |
+|---|---|---|
+| **Kyverno** (Admission/Generation) | At Namespace creation | Automatically generates a default-deny NetworkPolicy in every new namespace to enforce zero-trust networking. |
+| **Falco** (Runtime) | When a network connection is initiated | Detects unexpected outbound connections to external public IPs, providing runtime visibility into network exfiltration. |
+
+### MITRE ATT&CK Mapping
+
+| Tag | Technique | Description |
+|---|---|---|
+| `mitre_exfiltration` | **T1041 — Exfiltration Over C2 Channel** | Default-deny NetworkPolicies prevent unauthorized egress, while Falco alerts on external network connections. |
 
 ## Test Scenarios & Manifest Examples
 

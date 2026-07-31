@@ -60,15 +60,39 @@ spec:
 ```
 
 ## Detailed Explanation
-### Kyverno Policy Manifest Explanation
-The policy modifies `Namespace` objects at creation time:
-- **`metadata.name: add-pss-labels`**: The policy name.
-- **`matchConstraints`**: Specifies target resources and operations (e.g. Pods/Namespaces on CREATE/UPDATE).
-- **`rules[0].exclude`**: Prevents the mutation of system namespaces (`kube-system`, `kube-public`, `kube-node-lease`) to avoid breaking existing system-critical configurations.
-- **`rules[0].mutate`**: Applies a patch using `patchStrategicMerge`.
-- **`metadata.labels`**: Injects labels that enable Kubernetes native Pod Security Admission:
-  - `pod-security.kubernetes.io/enforce: baseline`: Rejects any pods that violate the baseline security standard (e.g. running privileged containers, sharing host namespaces).
-  - `pod-security.kubernetes.io/warn: restricted`: Warns users if they run a pod violating the stricter restricted standard (e.g. running as root).
+
+### Kyverno CEL Expression Breakdown
+
+```yaml
+Object{
+  metadata: Object.metadata{
+    labels: {
+      "pod-security.kubernetes.io/enforce": "baseline",
+      "pod-security.kubernetes.io/enforce-version": "latest",
+      "pod-security.kubernetes.io/warn": "restricted",
+      "pod-security.kubernetes.io/warn-version": "latest"
+    }
+  }
+}
+```
+
+| CEL Fragment | What It Does | Why It's Needed |
+|---|---|---|
+| `patchType: ApplyConfiguration` | Applies Server-Side Apply Object patch structure. | Merges labels safely into the target namespace's existing metadata map. |
+| `"pod-security.kubernetes.io/enforce": "baseline"` | Sets Kubernetes native Pod Security Admission enforce level to `baseline`. | Prevents pods violating Baseline Pod Security Standards (e.g. privileged, host namespaces) from running. |
+| `"pod-security.kubernetes.io/enforce-version": "latest"` | Sets PSS enforce version pin to `latest`. | Evaluates against latest Kubernetes PSS rules. |
+| `"pod-security.kubernetes.io/warn": "restricted"` | Sets PSS warning level to `restricted`. | Emits warnings on `kubectl apply` for pods violating Restricted PSS profile (e.g. running as root). |
+
+---
+
+### ℹ️ Why There Is No Falco Companion Rule
+
+Namespace security labeling is a metadata admission-time operation that enables Kubernetes built-in Pod Security Admission (PSA).
+
+* **Metadata Concern**: Labels are Kubernetes API metadata.
+* **Runtime Controls Handled**: Runtime enforcement of actual pod security behavior (privileged, root user, capabilities) is handled individually by runtime Falco rules in companion policy directories.
+
+---
 
 ## Test Scenarios & Manifest Examples
 

@@ -136,15 +136,55 @@ data:
 
 ## Detailed Explanation
 
-### Kyverno Policy Manifest Explanation
-This policy prevents container breakout to host namespaces:
-- **`validationActions`**: Set to `Deny` to block non-compliant requests at admission time.
-- **CEL Expression**: Checks `hostPID`, `hostIPC`, and `hostNetwork` fields on `object.spec`. If any are `true`, validation returns `false` and blocks creation.
+### Kyverno CEL Expression Breakdown
 
-### Falco Rule Manifest Explanation
-The Falco check catches namespace sharing at runtime:
-- **`evt.type in (execve, execveat) and evt.failed = false and container`**: Triggers whenever a new process is successfully spawned within a container context.
-- **`k8s.pod.host_pid=true or k8s.pod.host_network=true`**: Uses Kubernetes metadata enrichment to check if the pod shares host PID or Network namespaces, firing a `CRITICAL` alert containing `hostpid` and `hostnetwork` metadata values.
+```
+!(has(object.spec.hostPID) && object.spec.hostPID == true) &&
+!(has(object.spec.hostIPC) && object.spec.hostIPC == true) &&
+!(has(object.spec.hostNetwork) && object.spec.hostNetwork == true)
+```
+
+| CEL Fragment | What It Does | Why It's Needed |
+|---|---|---|
+| `has(object.spec.hostPID)` | Checks if `hostPID` field exists on `object.spec`. | Guards against null pointer errors if `hostPID` is omitted. |
+| `object.spec.hostPID == true` | Evaluates if `hostPID` is explicitly enabled. | Sharing host PID namespace allows containers to see and signal host processes. |
+| `!(has(...) && ... == true)` | Negates the condition — true only if `hostPID` is missing or `false`. | Blocks pods that attempt to share host PID. |
+| `!(has(object.spec.hostIPC) ...)` | Same check for host IPC namespace. | Prevents sharing inter-process communication mechanisms with host. |
+| `!(has(object.spec.hostNetwork) ...)` | Same check for host Network namespace. | Prevents pods from binding directly to host network interfaces and sniffing host traffic. |
+| `&&` (AND chain) | All three host namespace checks must pass. | A pod must not share PID, IPC, or Network namespaces with the host node. |
+
+---
+
+### Falco Condition Breakdown
+
+```
+evt.type in (execve, execveat) and evt.failed = false
+and container
+and (k8s.pod.host_pid=true or k8s.pod.host_network=true)
+```
+
+| Falco Field | What It Does | Why It's Included |
+|---|---|---|
+| `evt.type in (execve, execveat)` | Intercepts process execution events. | Detects active process spawns inside running containers. |
+| `evt.failed = false` | Filters for successful executions. | Ignores failed process executions. |
+| `container` | Ensures execution originates from inside a container. | Prevents false positives from host node daemons. |
+| `k8s.pod.host_pid=true` | Checks Kubernetes metadata to see if pod shares host PID namespace. | Detects containers running in host PID namespace at runtime. |
+| `k8s.pod.host_network=true` | Checks Kubernetes metadata to see if pod shares host Network namespace. | Detects containers running in host Network namespace at runtime. |
+
+---
+
+### 🔗 Defense-in-Depth: How Kyverno and Falco Work Together
+
+| Layer | When It Acts | What It Catches |
+|---|---|---|
+| **Kyverno** (Admission) | At pod creation/update | Rejects Pod specs setting `hostPID`, `hostIPC`, or `hostNetwork` to `true` before creation. |
+| **Falco** (Runtime) | When a process executes inside container | Detects running containers using host PID or host Network namespaces if admission control is bypassed or in Audit mode. |
+
+### MITRE ATT&CK Mapping
+
+| Tag | Technique | Description |
+|---|---|---|
+| `mitre_privilege_escalation` | **T1611 — Escape to Host** | Sharing host namespaces allows containers to inspect host processes, sniff host traffic, and execute container escapes. |
 
 ---
 

@@ -81,16 +81,58 @@ data:
 ```
 
 ## Detailed Explanation
-### Kyverno Policy Manifest Explanation
-The Kyverno check enforces a zero-trust credential mount policy using CEL ternary logic:
-```cel
+
+### Kyverno CEL Expression Breakdown
+
+```
 (!has(object.spec.serviceAccountName) || object.spec.serviceAccountName == 'default') ?
 (has(object.spec.automountServiceAccountToken) && object.spec.automountServiceAccountToken == false) : true
 ```
 
+The policy uses a CEL **ternary operator** (`condition ? true_branch : false_branch`):
+
+| CEL Fragment | What It Does | Why It's Needed |
+|---|---|---|
+| `!has(object.spec.serviceAccountName)` | Checks if `serviceAccountName` is absent. | Pods without an explicit SA name automatically default to the `default` SA. |
+| `object.spec.serviceAccountName == 'default'` | Checks if SA is explicitly set to `'default'`. | Identifies pods assigned to the default service account. |
+| `(!has(...) \|\| ... == 'default') ?` | Condition: Is this pod using the default ServiceAccount? | If `true`, evaluate the automount requirement (true branch). If `false`, skip check (returns `true` immediately). |
+| `has(object.spec.automountServiceAccountToken)` | Checks if `automountServiceAccountToken` is set on the Pod spec. | Verifies the field exists before comparing value. |
+| `object.spec.automountServiceAccountToken == false` | Checks that token automounting is explicitly disabled. | Ensures default SA pods opt out of token injection. |
+| `: true` | False branch of ternary expression. | Custom ServiceAccounts are exempt from this policy rule. |
+
 ---
 
-## Test Scenarios & CEL Logic Trace
+### Falco Condition Breakdown
+
+```
+evt.type in (open, openat, openat2) and container
+and fd.name contains "/var/run/secrets/kubernetes.io/serviceaccount"
+and not k8s.ns.name in (kube-system, kyverno)
+and not proc.name in (pause, tini)
+```
+
+| Falco Field | What It Does | Why It's Included |
+|---|---|---|
+| `evt.type in (open, openat, openat2)` | Matches file open syscalls. | Detects when a process opens the mounted service account token file. |
+| `container` | Scopes detection to container processes. | Filters out host-level processes. |
+| `fd.name contains "/var/run/secrets/kubernetes.io/serviceaccount"` | Matches the standard Kubernetes service account token mount path. | Identifies attempts to read SA token, CA cert, or namespace files. |
+| `not k8s.ns.name in (kube-system, kyverno)` | Excludes cluster management namespaces. | System pods legitimately read their SA tokens to communicate with the API server. |
+| `not proc.name in (pause, tini)` | Excludes container init processes/reapers. | Ignores container runtime setup processes. |
+
+---
+
+### 🔗 Defense-in-Depth: How Kyverno and Falco Work Together
+
+| Layer | When It Acts | What It Catches |
+|---|---|---|
+| **Kyverno** (Admission) | At pod creation/update | Prevents default SA pods from mounting service account tokens at admission time. |
+| **Falco** (Runtime) | When token file is opened | Detects credential access attempts if a container process opens the SA token path at runtime. |
+
+### MITRE ATT&CK Mapping
+
+| Tag | Technique | Description |
+|---|---|---|
+| `mitre_credential_access` | **T1552.007 — Unsecured Credentials: Container API Tokens** | Attackers read mounted service account tokens to authenticate to the Kubernetes API server for lateral movement. |
 
 ### Scenario 1 — Default ServiceAccount (Condition = `true`, Check Evaluated)
 

@@ -91,15 +91,76 @@ data:
 ```
 
 ## Detailed Explanation
-### Kyverno Policy Manifest Explanation
-The policy enforces read-only root filesystems:
-- **`validationActions`**: Set to `Deny` to block non-compliant requests at admission time.
-- **`readOnlyRootFilesystem: true`**: Enforces container security contexts to block disk writes to the root filesystem layer.
 
-### Falco Rule Manifest Explanation
-The companion Falco rule detects write operations at runtime:
-- **`evt.is_open_write = true`**: Triggers only when a file open syscall requests write access.
-- **`not fd.name startswith "/tmp"` or `/proc` or `/dev` or `/sys`**: Excludes directories that require writing or virtual filesystems. Write events in any other filesystem path trigger a `WARNING` level alert.
+### Kyverno CEL Expression Breakdown
+
+```
+object.spec.containers.all(c,
+  has(c.securityContext) &&
+  has(c.securityContext.readOnlyRootFilesystem) &&
+  c.securityContext.readOnlyRootFilesystem == true
+)
+```
+
+| CEL Fragment | What It Does | Why It's Needed |
+|---|---|---|
+| `object.spec.containers.all(c, ...)` | CEL list macro: every container must satisfy the predicate. | All containers must have read-only root filesystems — one writable container is enough for an attacker to persist. |
+| `has(c.securityContext)` | Checks if `securityContext` exists on the container. | Guards against null reference when the field is omitted. |
+| `has(c.securityContext.readOnlyRootFilesystem)` | Checks if the `readOnlyRootFilesystem` field is explicitly set. | The field defaults to `false` when absent — we require it to be explicitly set to `true`. |
+| `c.securityContext.readOnlyRootFilesystem == true` | Validates the actual value is `true`. | When `true`, the container runtime mounts the root filesystem as read-only. Writes are only possible to explicitly mounted volumes (e.g., `emptyDir` for `/tmp`). |
+
+> **Note:** This policy uses `validationActions: [Audit]` (not `Deny`). Many applications write to `/tmp`, `/var/cache`, or logging directories. Start in Audit mode, add `emptyDir` volumes for writable paths, then switch to `Deny`.
+
+#### CEL Evaluation Trace — Container with Read-Only Root FS
+
+```
+Step 1: has(c.securityContext) → true
+Step 2: has(c.securityContext.readOnlyRootFilesystem) → true
+Step 3: c.securityContext.readOnlyRootFilesystem == true → true
+Step 4: .all() returns true → ADMITTED
+```
+
+---
+
+### Falco Condition Breakdown
+
+```
+evt.type in (open, openat, openat2) and container
+and evt.is_open_write = true
+and not fd.name startswith "/tmp"
+and not fd.name startswith "/proc"
+and not fd.name startswith "/dev"
+and not fd.name startswith "/sys"
+and fd.name != ""
+and not k8s.ns.name in (kube-system, kyverno)
+```
+
+| Falco Field | What It Does | Why It's Included |
+|---|---|---|
+| `evt.type in (open, openat, openat2)` | Matches file open syscalls. `open` is the legacy call; `openat` and `openat2` are directory-relative variants used by modern applications. | These syscalls are used to open files for reading or writing — by filtering on them, we detect the exact moment a write attempt occurs. |
+| `container` | Event originates inside a container. | Host filesystem writes are normal OS operations and irrelevant to this policy. |
+| `evt.is_open_write = true` | Falco helper that checks if the open flags include `O_WRONLY` or `O_RDWR`. | Only write operations are security-relevant — reads from the root filesystem are expected behavior. |
+| `not fd.name startswith "/tmp"` | Excludes writes to `/tmp`. | `/tmp` is typically mounted as an `emptyDir` volume even on read-only containers. Writes here are expected and safe. |
+| `not fd.name startswith "/proc"` / `"/dev"` / `"/sys"` | Excludes virtual filesystems. | These are not real filesystems — they're kernel interfaces. Writes to `/proc/self/fd`, `/dev/null`, etc. are normal application behavior. |
+| `fd.name != ""` | Excludes events with empty file descriptors. | Some syscall events may have empty `fd.name` values (e.g., anonymous pipes, sockets). Filtering these reduces false positives. |
+| `not k8s.ns.name in (kube-system, kyverno)` | Excludes system namespaces. | System components may legitimately write to their container filesystems. |
+
+---
+
+### 🔗 Defense-in-Depth: How Kyverno and Falco Work Together
+
+| Layer | When It Acts | What It Catches |
+|---|---|---|
+| **Kyverno** (Admission) | At pod creation/update | Blocks pods without `readOnlyRootFilesystem: true` — prevents writable containers from being deployed. |
+| **Falco** (Runtime) | When a write syscall targets the root filesystem | Detects actual write attempts even in containers where the root FS should be read-only. |
+
+**Key gap Falco covers:** Kyverno validates the pod spec, but cannot prevent writes to explicitly mounted volumes. Even with `readOnlyRootFilesystem: true`, writable `emptyDir` or `hostPath` mounts exist. Falco detects writes to paths *outside* expected writable directories, catching attackers who write to unexpected locations via mounted volumes.
+
+### MITRE ATT&CK Mapping
+
+| Tag | Technique | Description |
+|---|---|---|
+| `mitre_persistence` | **T1546 — Event Triggered Execution** | Attackers write malicious binaries, scripts, or configuration files to the container filesystem to establish persistence or modify application behavior. |
 
 ## Test Scenarios & Manifest Examples
 

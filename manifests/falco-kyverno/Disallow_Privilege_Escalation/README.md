@@ -90,15 +90,77 @@ data:
 ```
 
 ## Detailed Explanation
-### Kyverno Policy Manifest Explanation
-The policy limits process permissions escalation:
-- **`spec.containers.securityContext.allowPrivilegeEscalation: false`**: Validates that all containers must have this attribute explicitly set to `false`.
-- **`=(initContainers)`**: Ensures the rule is also applied to initialization containers if they exist.
 
-### Falco Rule Manifest Explanation
-The runtime check detects usage of privilege escalation mechanisms:
-- **`proc.name in (sudo, su, newgrp, chsh, chfn, passwd, pkexec)`**: Checks if the spawned process matches known setuid/setgid binary commands.
-- **`not k8s.ns.name in (kube-system)`**: Ignores system tasks operating inside `kube-system` to limit alerts to application namespaces.
+### Kyverno CEL Expression Breakdown
+
+```
+object.spec.containers.all(c,
+  has(c.securityContext) &&
+  has(c.securityContext.allowPrivilegeEscalation) &&
+  c.securityContext.allowPrivilegeEscalation == false
+) &&
+object.spec.?initContainers.orValue([]).all(c,
+  has(c.securityContext) &&
+  has(c.securityContext.allowPrivilegeEscalation) &&
+  c.securityContext.allowPrivilegeEscalation == false
+)
+```
+
+| CEL Fragment | What It Does | Why It's Needed |
+|---|---|---|
+| `object.spec.containers.all(c, ...)` | CEL list macro: every main container must pass. | All containers must explicitly disable privilege escalation. |
+| `has(c.securityContext)` | Checks if `securityContext` exists. | Null-safety guard — prevents evaluation errors if securityContext is omitted. |
+| `has(c.securityContext.allowPrivilegeEscalation)` | Checks if the `allowPrivilegeEscalation` field is explicitly set. | This field defaults to `true` when omitted — meaning **absence enables escalation**. The policy requires explicit `false`. |
+| `c.securityContext.allowPrivilegeEscalation == false` | Validates the value is `false`. | When `false`, the Linux kernel's `no_new_privs` flag is set on the process, preventing `setuid` binaries from elevating privileges. |
+| `object.spec.?initContainers.orValue([])` | Safe optional field access for init containers. | Init containers are optional. `.orValue([])` returns an empty list if absent, so `.all()` returns `true` (vacuously true). |
+| `.all(c, ...)` on initContainers | Same check applied to init containers. | Init containers with `allowPrivilegeEscalation: true` could run `setuid` binaries during initialization. |
+
+> **How `no_new_privs` works:** When `allowPrivilegeEscalation: false` is set, Kubernetes instructs the container runtime to set the Linux `no_new_privs` flag. This kernel-level flag prevents the process and all its children from gaining privileges through `execve` (which is how `setuid` binaries like `sudo` work). It's an irreversible flag — once set, it cannot be unset.
+
+#### CEL Evaluation Trace — All Containers with `allowPrivilegeEscalation: false`
+
+```
+Step 1: Main containers: all have allowPrivilegeEscalation == false → true
+Step 2: Init containers: orValue([]) → empty list → .all() returns true (vacuous)
+Step 3: true && true = true → ADMITTED
+```
+
+---
+
+### Falco Condition Breakdown
+
+```
+evt.type in (execve, execveat) and evt.failed = false and container
+and (proc.name in (sudo, su, newgrp, chsh, chfn, passwd)
+  or proc.name = "pkexec")
+and not k8s.ns.name in (kube-system)
+```
+
+| Falco Field | What It Does | Why It's Included |
+|---|---|---|
+| `evt.type in (execve, execveat)` | Matches process execution syscalls. | Standard process start detection. |
+| `evt.failed = false` | Only successful executions. | Failed setuid attempts (e.g., `no_new_privs` blocked it) are filtered out. |
+| `container` | Event must originate inside a container. | Scopes to container workloads. |
+| `proc.name in (sudo, su, newgrp, chsh, chfn, passwd)` | Matches common setuid/setgid binaries. `sudo` and `su` switch users. `newgrp` changes group. `chsh`/`chfn` modify user attributes. `passwd` changes passwords. | These binaries use the setuid bit to escalate privileges. Their execution inside a container indicates either a misconfiguration or an attacker attempting escalation. |
+| `proc.name = "pkexec"` | Matches the PolicyKit execution agent. | `pkexec` (CVE-2021-4034 "PwnKit") was a major privilege escalation vulnerability in Linux. Its presence in a container is highly suspicious. |
+| `not k8s.ns.name in (kube-system)` | Excludes system namespaces. | System pods may legitimately use `su` or similar tools. |
+
+---
+
+### 🔗 Defense-in-Depth: How Kyverno and Falco Work Together
+
+| Layer | When It Acts | What It Catches |
+|---|---|---|
+| **Kyverno** (Admission) | At pod creation/update | Blocks pods without `allowPrivilegeEscalation: false`, preventing setuid binaries from gaining privileges. |
+| **Falco** (Runtime) | When setuid binaries execute | Detects actual execution of privilege escalation tools, even if `no_new_privs` prevents them from succeeding. |
+
+**Key gap Falco covers:** Even with `allowPrivilegeEscalation: false`, the setuid binaries may still be present in the container image and their *execution* (even if unsuccessful) indicates an attacker is probing the container. Falco catches the attempt before the attacker finds a kernel-level bypass.
+
+### MITRE ATT&CK Mapping
+
+| Tag | Technique | Description |
+|---|---|---|
+| `mitre_privilege_escalation` | **T1548.001 — Abuse Elevation Control: Setuid and Setgid** | Setuid binaries allow unprivileged users to execute commands as root. `allowPrivilegeEscalation: false` blocks this kernel mechanism. |
 
 ## Test Scenarios & Manifest Examples
 

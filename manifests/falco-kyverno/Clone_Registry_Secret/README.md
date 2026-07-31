@@ -66,6 +66,27 @@ spec:
 
 ## Detailed Explanation
 
+### Kyverno CEL GeneratingPolicy Breakdown
+
+```yaml
+variables:
+  - name: targetNs
+    expression: 'object.metadata.name'
+  - name: sourceSecret
+    expression: resource.Get("v1", "secrets", "default", "regcred")
+generate:
+  - expression: generator.Apply(variables.targetNs, [variables.sourceSecret])
+```
+
+| CEL Function / Fragment | What It Does | Why It's Needed |
+|---|---|---|
+| `kind: GeneratingPolicy` | Kyverno CEL policy type for automated resource generation and cloning. | Automatically creates downstream Kubernetes objects when trigger events occur. |
+| `object.metadata.name` | Extracts the namespace name from the trigger event (`CREATE` on Namespace). | Defines the target destination namespace for cloned resources. |
+| `resource.Get("v1", "secrets", "default", "regcred")` | Kyverno CEL resource reader function. | Reads the live source secret `regcred` from the `default` namespace at evaluation time. |
+| `generator.Apply(targetNs, [resources])` | Kyverno CEL generator function. | Clones and applies the source secret into `targetNs` and maintains active synchronization. |
+
+---
+
 ### Clone Source vs Data Source Mode
 | Mode | When to Use | CEL Pattern |
 |---|---|---|
@@ -78,15 +99,18 @@ When `synchronize.enabled: true`:
 - Deleting the source secret will delete all downstream clones.
 - Deleting the policy will delete all downstream clones (unless `orphanDownstreamOnPolicyDelete: true`).
 
-### CEL Variables
-| Variable | Expression | Purpose |
-|---|---|---|
-| `targetNs` | `object.metadata.name` | The name of the newly created namespace (trigger resource). |
-| `sourceSecret` | `resource.Get("v1", "secrets", "default", "regcred")` | Fetches the `regcred` secret from the `default` namespace. |
+---
+
+### ℹ️ Why There Is No Falco Companion Rule
+
+Resource cloning (copying image pull secrets to new namespaces) is a cluster administration workflow automation handled by Kyverno's generation engine.
+
+* **Cluster Automation**: Ensures credentials exist for image pulls in new namespaces.
+* **Runtime SA Token Access Covered**: Runtime credential access detection is handled by [Disallow Default SA Token](../Disallow_Default_SA_Token/README.md) and [Sensitive File Read](../Sensitive_File_Read/README.md).
 
 ---
 
-## Prerequisites
+### Prerequisites
 1. Create the source secret in the `default` namespace before applying this policy:
 ```bash
 kubectl create secret docker-registry regcred \

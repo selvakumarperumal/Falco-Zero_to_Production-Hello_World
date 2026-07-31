@@ -55,10 +55,34 @@ data:
 ```
 
 ## Detailed Explanation
-### Falco Rule Manifest Explanation
-This rule detects attempts to bypass directory boundaries via symlinks:
-- **`evt.type in (symlink, symlinkat)`**: Focuses specifically on symbolic link creation syscalls.
-- **`evt.arg.target startswith "/etc/"` or `/proc/` or `/sys/` or `/var/run/`**: Inspects the symlink target argument. If a link points to these core OS/orchestration directories, Falco triggers a `CRITICAL` alert indicating a potential breakout exploit.
+
+### Falco Condition Breakdown
+
+```yaml
+condition: >
+  evt.type in (symlink, symlinkat)
+  and container
+  and (evt.arg.target startswith "/etc/"
+    or evt.arg.target startswith "/proc/"
+    or evt.arg.target startswith "/sys/"
+    or evt.arg.target startswith "/var/run/")
+```
+
+| Falco Field | What It Does | Why It's Included |
+|---|---|---|
+| `evt.type in (symlink, symlinkat)` | Intercepts symbolic link creation syscalls (`symlink`/`symlinkat`). | Detects creation of symlinks inside containers. |
+| `container` | Scopes detection to container environments. | Ignores symlink operations on host node. |
+| `evt.arg.target startswith "/etc/"` | Inspects symlink target argument to see if it points into `/etc/`. | Detects symlinks targeting system configuration and credentials. |
+| `evt.arg.target startswith "/proc/"` / `"/sys/"` | Inspects if target points into virtual kernel filesystems. | Detects symlink attacks targeting kernel parameters and process data. |
+| `evt.arg.target startswith "/var/run/"` | Inspects if target points to `/var/run/` (e.g. `docker.sock`). | Detects symlink attacks targeting container runtime sockets. |
+
+---
+
+### MITRE ATT&CK Mapping
+
+| Tag | Technique | Description |
+|---|---|---|
+| `mitre_privilege_escalation` | **T1083 — File and Directory Discovery** / **CVE-2021-25741** | Symlink creation targeting sensitive system directories enables container escapes and path traversal attacks. |
 
 ## Test Scenarios & Manifest Examples
 

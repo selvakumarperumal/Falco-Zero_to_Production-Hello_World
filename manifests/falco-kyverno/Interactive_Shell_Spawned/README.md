@@ -53,12 +53,38 @@ data:
 ```
 
 ## Detailed Explanation
-### Falco Rule Manifest Explanation
-This is a detection-only control monitoring user session spawn:
-- **`evt.type in (execve, execveat) and evt.failed = false and container`**: Listens for successful process execution inside container boundaries.
-- **`proc.name in (bash, sh, zsh, ksh, csh, fish, dash)`**: Monitors common shells.
-- **`proc.tty != 0`**: Ensures the shell is linked to an interactive terminal session (e.g. `kubectl exec -it`). This helps differentiate an interactive session from script/system processes running non-interactively (which have TTY = 0).
-- **`not k8s.ns.name in (kube-system, kyverno)`**: Exempts system namespaces to avoid alerts on cluster administration operations.
+
+### Falco Condition Breakdown
+
+```yaml
+condition: >
+  evt.type in (execve, execveat) and evt.failed = false and container
+  and proc.name in (bash, sh, zsh, ksh, csh, fish, dash)
+  and proc.tty != 0
+  and not k8s.ns.name in (kube-system, kyverno)
+```
+
+| Falco Field | What It Does | Why It's Included |
+|---|---|---|
+| `evt.type in (execve, execveat)` | Intercepts process creation syscalls (`execve` / `execveat`). | Triggers execution analysis when new programs start. |
+| `evt.failed = false` | Ensures process execution completed successfully. | Ignores failed shell start attempts. |
+| `container` | Restricts event origin to containerized workloads. | Filters out administrative shell sessions on the Linux host node. |
+| `proc.name in (bash, sh, zsh, ksh, csh, fish, dash)` | Matches shell process binary names. | Targets common Linux interactive shells. |
+| `proc.tty != 0` | Checks if pseudo-TTY device (terminal) is allocated (`proc.tty != 0`). | Differentiates interactive user sessions (e.g. `kubectl exec -it`) from automated non-interactive background scripts (`proc.tty == 0`). |
+| `not k8s.ns.name in (kube-system, kyverno)` | Excludes Kubernetes administrative and policy namespaces. | Prevents alert noise during cluster maintenance tasks. |
+
+---
+
+### Syscall Analysis & Post-Exploitation Context
+
+* **Why TTY Allocation Matters (`proc.tty != 0`)**: Automated application scripts run shell commands without allocating a pseudo-terminal. When an attacker connects via `kubectl exec -it` or a remote command execution (RCE) payload with terminal allocation, `proc.tty` is non-zero.
+* **Why Admission Control Cannot Prevent This**: Kyverno evaluates resources at API submission time (`kubectl apply`). Spawning a shell in a running container happens via subresource exec requests or runtime process spawning, which cannot be blocked by pod admission policy. Runtime eBPF syscall inspection via Falco is required.
+
+### MITRE ATT&CK Mapping
+
+| Tag | Technique | Description |
+|---|---|---|
+| `mitre_execution` | **T1059.004 — Command and Scripting Interpreter: Unix Shell** | Attackers spawn interactive shells to execute post-exploitation commands, explore filesystems, and pivot across the cluster. |
 
 ## Test Scenarios & Manifest Examples
 

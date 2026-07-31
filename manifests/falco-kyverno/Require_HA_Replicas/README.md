@@ -75,6 +75,41 @@ spec:
 
 ## Detailed Explanation
 
+### Kyverno CEL ValidatingPolicy Breakdown
+
+```yaml
+matchConditions:
+  - name: is-production
+    expression: >-
+      has(namespaceObject.metadata.labels) &&
+      'environment' in namespaceObject.metadata.labels &&
+      namespaceObject.metadata.labels['environment'] == 'production'
+validations:
+  - expression: 'object.spec.replicas >= 2'
+    messageExpression: >-
+      "Deployment " + object.metadata.name + " has " +
+      string(object.spec.replicas) + " replica(s). Minimum 2 required for HA in production."
+```
+
+| CEL Fragment / Field | What It Does | Why It's Needed |
+|---|---|---|
+| `namespaceObject.metadata.labels` | References the live target Namespace API object's labels map. | Enables namespace-scoped policy filters based on live namespace labels. |
+| `'environment' in namespaceObject.metadata.labels` | Checks if `environment` label exists on target namespace. | Scopes policy activation to labeled environments. |
+| `namespaceObject.metadata.labels['environment'] == 'production'` | Validates environment label value equals `'production'`. | Ensures high-availability replica rules only apply in production namespaces. |
+| `object.spec.replicas >= 2` | Evaluates Deployment replica count (`spec.replicas`). | Enforces a minimum of 2 pod replicas for HA. |
+| `messageExpression` | Constructs dynamic denial message string using `+` and `string()`. | Generates contextual, informative rejection messages (e.g. `"Deployment my-api has 1 replica(s)..."`). |
+
+---
+
+### ℹ️ Why There Is No Falco Companion Rule
+
+Replica count enforcement is an availability and cluster architecture control evaluated on Deployment objects at admission time.
+
+* **API Object Configuration**: Replica counts exist in Kubernetes API Deployment specifications.
+* **No Runtime Event**: There are no Linux syscalls corresponding to replica counts; Kubernetes controllers maintain pod instances.
+
+---
+
 ### `matchConditions` vs `matchConstraints`
 | Feature | Purpose |
 |---|---|

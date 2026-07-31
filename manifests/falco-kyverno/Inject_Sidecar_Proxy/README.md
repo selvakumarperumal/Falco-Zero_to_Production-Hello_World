@@ -79,7 +79,8 @@ spec:
 
 ## Detailed Explanation
 
-### `matchConditions` for Opt-In Annotation
+### Kyverno CEL MutatingPolicy Breakdown
+
 ```yaml
 matchConditions:
   - name: has-sidecar-annotation
@@ -87,17 +88,33 @@ matchConditions:
       has(object.metadata.annotations) &&
       'sidecar.kyverno.io/inject' in object.metadata.annotations &&
       object.metadata.annotations['sidecar.kyverno.io/inject'] == 'true'
+mutations:
+  - patchType: JSONPatch
+    jsonPatch:
+      expression: >-
+        JSONPatch{op: "add", path: "/spec/containers/-",
+          value: Object.spec.containers{ ... }
+        }
 ```
-- The policy only fires for pods with the annotation `sidecar.kyverno.io/inject: "true"`.
-- Pods without this annotation are unaffected.
 
-### JSONPatch CEL Expression
-```
-JSONPatch{op: "add", path: "/spec/containers/-", value: Object.spec.containers{...}}
-```
-- `op: "add"` — JSON Patch add operation.
-- `path: "/spec/containers/-"` — Append to the containers array (`-` = end of array).
-- `value: Object.spec.containers{...}` — Typed CEL container object with name, image, and resources.
+| CEL Fragment / Parameter | What It Does | Why It's Needed |
+|---|---|---|
+| `matchConditions` | Pre-evaluation filter written in CEL. | Scopes execution so the policy only fires for Pods with `sidecar.kyverno.io/inject: "true"`. |
+| `patchType: JSONPatch` | Specifies array modification via JSONPatch. | Ideal for appending or removing items in lists (like adding a container to `.spec.containers`). |
+| `op: "add"` | Standard RFC 6902 JSON patch operation. | Inserts a new container definition. |
+| `path: "/spec/containers/-"` | Targets the end of the `containers` array (`-` = append). | Appends the sidecar without overwriting existing containers. |
+| `value: Object.spec.containers{...}` | Typed CEL object construction for sidecar container definition. | Defines Fluent Bit container name, image, CPU, and memory limits. |
+
+---
+
+### ℹ️ Why There Is No Falco Companion Rule
+
+Sidecar container injection is an admission-time mutation of the Pod manifest.
+
+* **Admission Modification**: Injects Fluent Bit container specs into admitting pods.
+* **Sidecar Process Monitoring**: Runtime execution inside injected sidecars (and app containers) is monitored by general process execution rules like [Interactive Shell Spawned](../Interactive_Shell_Spawned/README.md).
+
+---
 
 ### GitOps Considerations
 When using ArgoCD, the injected sidecar will cause drift. Add to your ArgoCD `Application`:

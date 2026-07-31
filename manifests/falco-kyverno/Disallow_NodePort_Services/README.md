@@ -83,16 +83,74 @@ data:
 ```
 
 ## Detailed Explanation
-### Kyverno Policy Manifest Explanation
-The Kyverno configuration protects node-level network exposure:
-- **`kinds: [Service]`**: Applies only to Kubernetes Service objects.
-- **`spec.type: "!NodePort"`**: Enforces that the service type must NOT be set to NodePort (only ClusterIP or LoadBalancer are permitted).
 
-### Falco Rule Manifest Explanation
-The runtime rule acts as a fallback for unauthorized reverse shell/backdoor listeners:
-- **`evt.type in (bind, listen)`**: Matches socket bind or listen syscall completions.
-- **`fd.sport != 0`**: Ensures a source port is allocated.
-- **`not fd.sport in (80, 443, 8080, 8443, 3000, 5000, 9090)`**: Lists approved port exemptions. If a containerized process attempts to open a server socket on any other port, it triggers a `NOTICE` alert.
+### Kyverno CEL Expression Breakdown
+
+```
+!has(object.spec.type) || object.spec.type != 'NodePort'
+```
+
+This is a notably simple CEL expression compared to pod-level policies:
+
+| CEL Fragment | What It Does | Why It's Needed |
+|---|---|---|
+| `!has(object.spec.type)` | Returns `true` if the `type` field is absent from the Service spec. | When `spec.type` is omitted, Kubernetes defaults to `ClusterIP` (internal-only). This is safe — the policy should allow it. |
+| `\|\|` (OR operator) | If the field is absent, short-circuit to `true` (admitted). Otherwise, check the value. | Handles the common case where services don't explicitly set `type`. |
+| `object.spec.type != 'NodePort'` | Returns `true` if the type is anything other than `NodePort`. | Allows `ClusterIP`, `LoadBalancer`, and `ExternalName` — only `NodePort` is blocked. |
+
+> **Why target Services, not Pods:** This is one of the few Kyverno policies that targets `resources: [services]` instead of `resources: [pods]`. NodePort is a Service-level configuration, not a container-level one.
+
+#### CEL Evaluation Trace — ClusterIP Service (Default)
+
+```
+Step 1: has(object.spec.type) → false (type field omitted, defaults to ClusterIP)
+Step 2: !false = true → SHORT-CIRCUIT → ADMITTED
+```
+
+#### CEL Evaluation Trace — NodePort Service
+
+```
+Step 1: has(object.spec.type) → true
+Step 2: !true = false → evaluate right side
+Step 3: object.spec.type = "NodePort" → "NodePort" != "NodePort" → false
+Step 4: false || false = false → DENIED
+```
+
+---
+
+### Falco Condition Breakdown
+
+```
+evt.type in (bind, listen) and container
+and fd.sport != 0
+and not fd.sport in (80, 443, 8080, 8443, 3000, 5000, 9090)
+and not k8s.ns.name in (kube-system, kyverno)
+```
+
+| Falco Field | What It Does | Why It's Included |
+|---|---|---|
+| `evt.type in (bind, listen)` | Matches socket `bind` (assign address to socket) and `listen` (mark socket as passive) syscalls. | These syscalls are the precursors to accepting network connections — any process listening on a port goes through these calls. |
+| `container` | Event must originate inside a container. | Host-level network daemons legitimately bind to many ports. |
+| `fd.sport != 0` | The source port is non-zero (a port is actually allocated). | Port 0 means "let the kernel choose" — it's used for outbound connections, not servers. |
+| `not fd.sport in (80, 443, 8080, 8443, 3000, 5000, 9090)` | Excludes commonly used application ports. | These are standard web server and application ports that are expected. Binding to an unexpected port (e.g., 4444, 1337) suggests a backdoor or reverse shell listener. |
+| `not k8s.ns.name in (kube-system, kyverno)` | Excludes system namespaces. | System components bind to various ports as part of normal operation. |
+
+---
+
+### 🔗 Defense-in-Depth: How Kyverno and Falco Work Together
+
+| Layer | When It Acts | What It Catches |
+|---|---|---|
+| **Kyverno** (Admission) | At Service creation/update | Blocks NodePort Service objects from being created, preventing cluster-wide port exposure. |
+| **Falco** (Runtime) | When a process binds to an unexpected port | Detects backdoor listeners and reverse shell servers inside containers, regardless of Service type. |
+
+**Key gap Falco covers:** Kyverno blocks NodePort Services at the API level, but cannot prevent a compromised container from binding to a port directly. An attacker can use `nc -l -p 4444` inside a container to listen for connections without creating any Kubernetes Service. Falco detects this at the syscall level.
+
+### MITRE ATT&CK Mapping
+
+| Tag | Technique | Description |
+|---|---|---|
+| `mitre_command_and_control` | **T1571 — Non-Standard Port** | Attackers use non-standard ports for C2 channels to avoid detection by port-based firewall rules. |
 
 ## Test Scenarios & Manifest Examples
 

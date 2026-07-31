@@ -82,16 +82,69 @@ data:
 ```
 
 ## Detailed Explanation
-### Kyverno Policy Manifest Explanation
-The policy enforces application health checks:
-- **`validationActions`**: Set to `Deny` to block non-compliant requests at admission time.
-- **`pod-policies.kyverno.io/autogen-controllers`**: Automatically generates matching policies for container controllers like Deployment, StatefulSet, and DaemonSet.
-- **`livenessProbe: "?*"` and `readinessProbe: "?*"`**: Requires both probe keys to be populated.
 
-### Falco Rule Manifest Explanation
-The companion Falco rule detects unstable application crash loops:
-- **`proc.name in (sh, bash) and proc.cmdline contains "exit"`**: Identifies shell-based termination execution.
-- **`proc.duration <= 5000000000`**: Tracks the process lifespan (5 billion nanoseconds = 5 seconds). If shell processes execute and exit within 5 seconds, it flags potential crash loop behavior.
+### Kyverno CEL Expression Breakdown
+
+```
+object.spec.containers.all(c, has(c.livenessProbe) && has(c.readinessProbe))
+```
+
+| CEL Fragment | What It Does | Why It's Needed |
+|---|---|---|
+| `object.spec.containers.all(c, ...)` | CEL list macro: every container must satisfy the predicate. | All containers should have health probes — one container without probes can become a "zombie" that keeps receiving traffic while hung. |
+| `has(c.livenessProbe)` | Checks if the `livenessProbe` field exists on the container. | The liveness probe tells Kubernetes to restart the container if it becomes unresponsive. Without it, a deadlocked container runs forever. |
+| `has(c.readinessProbe)` | Checks if the `readinessProbe` field exists on the container. | The readiness probe tells Kubernetes whether the container is ready to receive traffic. Without it, traffic is sent to containers still initializing or in a degraded state. |
+| `&&` (AND) | Both probes must be present. | Liveness alone restarts unhealthy containers but doesn't prevent traffic to degraded ones. Readiness alone removes traffic but doesn't restart hung containers. Both are needed for complete health management. |
+
+> **Note:** This policy uses `validationActions: [Audit]` because some legitimate workloads (Jobs, CronJobs, one-shot init containers) don't need probes. Start in Audit mode, identify violations, and add exceptions for batch workloads before switching to `Deny`.
+
+> **What the policy does NOT validate:** It only checks that probes *exist* — it doesn't validate the probe configuration (type, path, port, intervals). A container with an empty `livenessProbe: {}` would pass but Kubernetes would reject it at the API level for missing required fields.
+
+#### CEL Evaluation Trace — Container with Both Probes
+
+```
+Step 1: has(c.livenessProbe) → true (HTTP GET /healthz configured)
+Step 2: has(c.readinessProbe) → true (TCP port 8080 configured)
+Step 3: true && true = true → container passes
+Step 4: .all() returns true → ADMITTED
+```
+
+---
+
+### Falco Condition Breakdown
+
+```
+evt.type in (execve, execveat) and evt.failed = false and container
+and proc.name in (sh, bash)
+and proc.cmdline contains "exit"
+and proc.duration <= 5000000000
+```
+
+| Falco Field | What It Does | Why It's Included |
+|---|---|---|
+| `evt.type in (execve, execveat)` | Matches process execution syscalls. | Standard process start detection. |
+| `evt.failed = false` | Only successful executions. | Filters out failed attempts. |
+| `container` | Event must originate inside a container. | Scopes to containerized workloads. |
+| `proc.name in (sh, bash)` | Matches shell process execution. | Shell scripts wrapping an application are common entrypoints. When they exit rapidly, it suggests the application is crashing. |
+| `proc.cmdline contains "exit"` | Checks if the command line includes an `exit` command. | Rapid shell exits indicate either explicit `exit` calls or crash handlers that terminate quickly. |
+| `proc.duration <= 5000000000` | Process lasted less than 5 seconds (5 billion nanoseconds). | A process that starts and exits within 5 seconds is likely crashing. Normal application processes run for minutes or hours. This short duration combined with shell execution strongly suggests a crash loop. |
+
+---
+
+### 🔗 Defense-in-Depth: How Kyverno and Falco Work Together
+
+| Layer | When It Acts | What It Catches |
+|---|---|---|
+| **Kyverno** (Admission) | At pod creation/update | Blocks pods without health probes — ensures Kubernetes can detect and recover from unhealthy containers. |
+| **Falco** (Runtime) | When crash loop patterns are detected | Detects containers that are repeatedly crashing and restarting, which may indicate probes are misconfigured or the application is fundamentally broken. |
+
+**Key gap Falco covers:** Kyverno ensures probes exist but cannot verify they are *effective*. A container could have a liveness probe that always returns 200 OK (hardcoded) while the application is actually hung. Falco detects the observable consequence — rapid process crashes — regardless of probe configuration.
+
+### MITRE ATT&CK Mapping
+
+| Tag | Technique | Description |
+|---|---|---|
+| `health` / `reliability` | **Operational Reliability** | While not a direct attack technique, containers without health probes are more susceptible to denial-of-service because Kubernetes cannot automatically detect and recover from failures. |
 
 ## Test Scenarios & Manifest Examples
 

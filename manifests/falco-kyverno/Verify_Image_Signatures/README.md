@@ -9,6 +9,45 @@
 ## Description
 Supply chain attacks targeting container images (e.g., injecting malicious layers, tag hijacking) are a critical Kubernetes threat vector. This `ImageValidatingPolicy` enforces that all container images from `ghcr.io/*` are signed using [Cosign](https://github.com/sigstore/cosign) with a public key. The policy uses Kyverno's CEL function `verifyImageSignatures()` to cryptographically verify image signatures at admission time.
 
+## Detailed Explanation
+
+### Kyverno CEL ImageValidatingPolicy Breakdown
+
+```yaml
+spec:
+  matchImageReferences:
+    - glob: 'ghcr.io/*'
+  attestors:
+    - name: cosign
+      cosign:
+        key:
+          data: | ...
+  validations:
+    - expression: >-
+        images.containers.map(image,
+          verifyImageSignatures(image, [attestors.cosign])
+        ).all(e, e > 0)
+```
+
+| CEL Function / Fragment | What It Does | Why It's Needed |
+|---|---|---|
+| `kind: ImageValidatingPolicy` | Kyverno image signature validation policy type. | Exposes specialized Cosign and in-toto attestation verification functions in CEL. |
+| `matchImageReferences: [glob: 'ghcr.io/*']` | Filters images by domain pattern using globs. | Restricts signature enforcement to container images sourced from targeted registries. |
+| `images.containers` | CEL built-in helper returning list of container images in target pod spec. | Extracts image reference URIs for evaluation. |
+| `verifyImageSignatures(image, [attestors.cosign])` | Cosign signature check function. | Cryptographically verifies if `image` has a valid Cosign signature signed by the configured public key. Returns count of verified signatures (`> 0`). |
+| `.all(e, e > 0)` | CEL list macro: checks that verified signature count `e` is greater than 0 for all container images. | Enforces that **every** container image in the pod possesses a valid cryptographic signature. |
+
+---
+
+### ℹ️ Why There Is No Falco Companion Rule
+
+Image signature verification relies on public key cryptography to check signatures against container registries during admission before image pull.
+
+* **Admission Cryptography**: Cosign signature checks require network calls to image registries and public key matching during admission.
+* **Registry Image Restrictions**: Runtime registry enforcement is handled by [Restrict Image Registries](../Restrict_Image_Registries/README.md).
+
+---
+
 ### 🛡️ Problem Statement — What Are We Preventing?
 
 Container images are the fundamental unit of deployment in Kubernetes. If an attacker can tamper with an image between build and deployment, they can inject arbitrary code into production — affecting every pod that uses that image. Without cryptographic signature verification, organizations are blind to image tampering:

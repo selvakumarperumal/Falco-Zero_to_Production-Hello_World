@@ -57,29 +57,41 @@ spec:
 
 ## Detailed Explanation
 
-### Key Fields
-| Field | Purpose |
-|---|---|
-| `schedule` | Standard cron expression (`0 2 * * *` = daily at 2 AM UTC). Minimum granularity: 1 minute. |
-| `matchConstraints.resourceRules` | Targets `batch/v1 Jobs` across all namespaces. |
-| `conditions` | CEL expressions evaluated per matched resource. All must return `true` for deletion. |
+### Kyverno CEL DeletingPolicy Breakdown
 
-### CEL Expression Breakdown
-```
-object.status.conditions.exists(c, c.type == 'Complete' && c.status == 'True')
-```
-- `object.status.conditions` — Kubernetes Job status conditions list.
-- `.exists(c, ...)` — CEL macro: returns `true` if at least one element satisfies the predicate.
-- `c.type == 'Complete' && c.status == 'True'` — Matches the standard Kubernetes Job completion condition.
-
-### RBAC Requirements
-The Kyverno cleanup controller requires permissions to delete Jobs:
 ```yaml
-rules:
-  - apiGroups: ['batch']
-    resources: ['jobs']
-    verbs: ['get', 'list', 'watch', 'delete']
+spec:
+  schedule: '0 2 * * *'
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ['batch']
+        apiVersions: ['v1']
+        resources: ['jobs']
+  conditions:
+    - name: is-completed
+      expression: >-
+        object.status.conditions.exists(c,
+          c.type == 'Complete' && c.status == 'True')
 ```
+
+| Field / CEL Fragment | What It Does | Why It's Needed |
+|---|---|---|
+| `kind: DeletingPolicy` | Kyverno policy type for background resource cleanup. | Unlike admission webhooks, DeletingPolicy runs as a background cron controller. |
+| `schedule: '0 2 * * *'` | Cron schedule expression (daily at 02:00 UTC). | Controls how frequently Kyverno checks for stale resources to delete. |
+| `object.status.conditions` | Accesses the array of status condition objects on the Job. | Job completion state is tracked in the status condition list. |
+| `.exists(c, ...)` | CEL list macro: returns `true` if any element matches. | Scans condition objects for the completion marker. |
+| `c.type == 'Complete' && c.status == 'True'` | Evaluates if condition type is `Complete` and status is `True`. | Identifies successfully finished Jobs while preserving failed or active Jobs. |
+
+---
+
+### ℹ️ Why There Is No Falco Companion Rule
+
+Resource deletion for cluster hygiene is an administrative background cleanup task managed by Kyverno's cleanup controller.
+
+* **Cluster Hygiene**: Deleting stale Job etcd objects does not correspond to a security threat or runtime attack vector.
+* **No Runtime Syscall**: No Linux kernel syscalls occur during etcd object garbage collection.
+
+---
 
 ---
 
