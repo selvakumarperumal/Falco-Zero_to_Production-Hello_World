@@ -99,6 +99,22 @@ data:
 ```
 
 ## Detailed Explanation
+#### Truth Table — Kyverno Generator Evaluation
+
+| Target Namespace Event | Namespace Excluded (`kube-system` / `kyverno`) | Generator Result |
+|---|---|---|
+| `CREATE` | `true` (`kube-system`) | Skip generation |
+| `CREATE` | `false` (`prod-app`) | **GENERATE** (`default-deny` NetworkPolicy) |
+
+#### Truth Table — Falco Runtime Detections
+
+| `evt.type` | `container` | Destination IP (`fd.sip`) | Namespace Excluded | Falco Alert Result |
+|---|---|---|---|---|
+| `connect` | `true` | `10.0.1.5` (RFC1918 Private IP) | `false` | No Alert |
+| `connect` | `true` | `1.1.1.1` (Public External IP) | `true` (`kube-system`) | No Alert |
+| `connect` | `true` | `203.0.113.5` (Public External IP) | `false` (`default`) | **ALERT FIRED (WARNING)** |
+
+
 
 ### Kyverno CEL / GeneratingPolicy Breakdown
 

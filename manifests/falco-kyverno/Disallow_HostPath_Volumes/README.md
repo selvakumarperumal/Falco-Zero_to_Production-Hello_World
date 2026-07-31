@@ -135,6 +135,22 @@ data:
 ---
 
 ## Detailed Explanation
+#### Truth Table — Kyverno CEL Evaluation
+
+| `has(spec.volumes)` | Volume Has `hostPath` | `!has(v.hostPath)` | `volumes.all(...)` | Policy Decision |
+|---|---|---|---|---|
+| `false` (no volumes) | — | `true` | `true` | **PASS** |
+| `true` | `false` (`emptyDir`, `configMap`) | `true` | `true` | **PASS** |
+| `true` | `true` (`hostPath: {path: /var/run}`) | `false` | `false` | **FAIL** |
+
+#### Truth Table — Falco Runtime Detections
+
+| `evt.type` | `container` | Target Mount Path (`fd.name`) | Falco Alert Result |
+|---|---|---|---|
+| `open` / `openat` | `true` | `/var/log/app.log` | No Alert |
+| `open` / `openat` | `true` | `/var/run/docker.sock` / `/etc/kubernetes/` | **ALERT FIRED (CRITICAL)** |
+
+
 
 ### Kyverno CEL Expression Breakdown
 

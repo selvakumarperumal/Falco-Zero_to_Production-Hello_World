@@ -90,6 +90,24 @@ data:
 ```
 
 ## Detailed Explanation
+#### Truth Table — Kyverno CEL Evaluation
+
+| `has(securityContext)` | `has(allowPrivilegeEscalation)` | Value | Evaluation Result | Policy Decision |
+|---|---|---|---|---|
+| `false` | — | — | `false` | **FAIL** |
+| `true` | `false` | — | `false` | **FAIL** |
+| `true` | `true` | `true` | `false` | **FAIL** |
+| `true` | `true` | `false` | `true` | **PASS** |
+
+#### Truth Table — Falco Runtime Detections
+
+| `container` | Process Name | SETUID Flag | User UID | Falco Alert Result |
+|---|---|---|---|---|
+| `true` | `app` | `false` | `1000` | No Alert |
+| `true` | `sudo` / `su` | — | `1000` | **ALERT FIRED (CRITICAL)** |
+| `true` | `custom-bin` | `true` | `1000` | **ALERT FIRED (CRITICAL)** |
+
+
 
 ### Kyverno CEL Expression Breakdown
 

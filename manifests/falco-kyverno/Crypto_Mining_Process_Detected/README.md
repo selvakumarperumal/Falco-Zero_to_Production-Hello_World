@@ -68,6 +68,16 @@ data:
 ```
 
 ## Detailed Explanation
+#### Truth Table — Falco Runtime Detections
+
+| `evt.type` | `container` | Process / Command Pattern | Falco Alert Result |
+|---|---|---|---|
+| `execve` / `execveat` | `false` (host) | `xmrig` / `minerd` | No Alert (Host process filtered) |
+| `execve` / `execveat` | `true` | `nginx` / `python` | No Alert (Standard container workload) |
+| `execve` / `execveat` | `true` | `xmrig` / `minerd` / `cpuminer` | **ALERT FIRED (CRITICAL)** |
+| `execve` / `execveat` | `true` | Command contains `stratum+tcp://` | **ALERT FIRED (CRITICAL)** |
+
+
 
 ### Falco Condition Breakdown
 

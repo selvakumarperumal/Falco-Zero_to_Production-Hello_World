@@ -82,6 +82,22 @@ data:
 ```
 
 ## Detailed Explanation
+#### Truth Table — Kyverno CEL Evaluation
+
+| `has(c.livenessProbe)` | `has(c.readinessProbe)` | `has(...) && has(...)` | Policy Decision |
+|---|---|---|---|
+| `false` | `false` | `false` | **FAIL** |
+| `true` | `false` | `false` | **FAIL** |
+| `false` | `true` | `false` | **FAIL** |
+| `true` | `true` | `true` | **PASS** |
+
+#### Truth Table — Falco Runtime Detections
+
+| `container` | Process Name | Command Line | Duration | Falco Alert Result |
+|---|---|---|---|
+| `true` | `sh` / `bash` | `"exit 1"` | `<= 5s` | **ALERT FIRED (WARNING)** |
+
+
 
 ### Kyverno CEL Expression Breakdown
 

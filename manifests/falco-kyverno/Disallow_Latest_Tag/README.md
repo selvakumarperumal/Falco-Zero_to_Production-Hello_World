@@ -122,6 +122,22 @@ data:
 ---
 
 ## Detailed Explanation
+#### Truth Table — Kyverno CEL Evaluation
+
+| `c.image` Format | `c.image.contains(':')` | `c.image.endsWith(':latest')` | Expression Result | Policy Decision |
+|---|---|---|---|---|
+| `nginx:1.25` | `true` | `false` | `true` | **PASS** |
+| `nginx` (untagged) | `false` | `false` | `false` | **FAIL** |
+| `nginx:latest` | `true` | `true` | `false` | **FAIL** |
+
+#### Truth Table — Falco Runtime Detections
+
+| `container` | `proc.vpid` | `container.image.tag` | Falco Alert Result |
+|---|---|---|---|
+| `true` | `1` | `"1.25"` | No Alert |
+| `true` | `1` | `"latest"` | **ALERT FIRED (WARNING)** |
+
+
 
 ### Kyverno CEL Expression Breakdown
 

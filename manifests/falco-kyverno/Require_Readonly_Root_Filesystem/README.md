@@ -91,6 +91,22 @@ data:
 ```
 
 ## Detailed Explanation
+#### Truth Table — Kyverno CEL Evaluation
+
+| `has(securityContext)` | `has(readOnlyRootFilesystem)` | `readOnlyRootFilesystem` Value | Policy Decision |
+|---|---|---|---|
+| `false` | — | — | **FAIL** |
+| `true` | `true` | `false` | **FAIL** |
+| `true` | `true` | `true` | **PASS** |
+
+#### Truth Table — Falco Runtime Detections
+
+| `container` | `evt.is_open_write` | Target `fd.name` Path | Falco Alert Result |
+|---|---|---|---|
+| `true` | `true` | `/tmp/cache.txt` (Exempt `/tmp`) | No Alert |
+| `true` | `true` | `/etc/config.json` (Root FS) | **ALERT FIRED (ERROR)** |
+
+
 
 ### Kyverno CEL Expression Breakdown
 

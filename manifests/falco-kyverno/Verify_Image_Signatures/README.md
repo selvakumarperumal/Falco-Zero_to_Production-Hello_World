@@ -10,6 +10,15 @@
 Supply chain attacks targeting container images (e.g., injecting malicious layers, tag hijacking) are a critical Kubernetes threat vector. This `ImageValidatingPolicy` enforces that all container images from `ghcr.io/*` are signed using [Cosign](https://github.com/sigstore/cosign) with a public key. The policy uses Kyverno's CEL function `verifyImageSignatures()` to cryptographically verify image signatures at admission time.
 
 ## Detailed Explanation
+#### Truth Table — Kyverno ImageValidatingPolicy Evaluation
+
+| Image Matches `matchImageReferences` | Cosign Signature Verified | `verifyImageSignatures(...)` Result | Policy Decision |
+|---|---|---|---|
+| `false` (`docker.io/nginx:1.25`) | — | — | **PASS** (Exempt pattern) |
+| `true` (`ghcr.io/my-org/my-app`) | `false` (Unsigned / Invalid key) | `0` | **FAIL** (Admission blocked) |
+| `true` (`ghcr.io/my-org/my-app`) | `true` (Valid Cosign signature) | `> 0` | **PASS** |
+
+
 
 ### Kyverno CEL ImageValidatingPolicy Breakdown
 

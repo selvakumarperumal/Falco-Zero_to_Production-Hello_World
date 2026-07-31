@@ -52,6 +52,15 @@ spec:
 ```
 
 ## Detailed Explanation
+#### Truth Table — Kyverno CEL Evaluation
+
+| `has(metadata.labels)` | `'app.kubernetes.io/name' in labels` | Label Value | Expression Result | Policy Decision |
+|---|---|---|---|---|
+| `false` | `false` | — | `false` | **FAIL** |
+| `true` | `true` | `""` (empty) | `false` | **FAIL** |
+| `true` | `true` | `"my-app"` | `true` | **PASS** |
+
+
 
 ### Kyverno CEL Expression Breakdown
 

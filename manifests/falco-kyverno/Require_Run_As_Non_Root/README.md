@@ -79,6 +79,23 @@ data:
 ```
 
 ## Detailed Explanation
+#### Truth Table — Kyverno CEL Evaluation
+
+| Pod `runAsNonRoot` | Container `runAsNonRoot` | Expression Result | Policy Decision |
+|---|---|---|---|
+| `false` / omitted | `false` / omitted | `false` | **FAIL** |
+| `true` | omitted | `true` | **PASS** |
+| omitted | `true` | `true` | **PASS** |
+
+#### Truth Table — Falco Runtime Detections
+
+| `container` | `user.uid` | Namespace Excluded | Falco Alert Result |
+|---|---|---|---|
+| `true` | `1000` | `false` | No Alert |
+| `true` | `0` (root) | `true` (`kube-system`) | No Alert |
+| `true` | `0` (root) | `false` (`prod`) | **ALERT FIRED (WARNING)** |
+
+
 
 ### Kyverno CEL Expression Breakdown
 

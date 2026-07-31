@@ -56,6 +56,15 @@ data:
 ```
 
 ## Detailed Explanation
+#### Truth Table — Falco Runtime Detections
+
+| `evt.type` | `container` | Target `fd.name` Pattern | Process Excluded | Falco Alert Result |
+|---|---|---|---|---|
+| `unlink` | `true` | `/tmp/file.txt` | `false` | No Alert |
+| `unlink` | `true` | `/var/log/app.log` | `true` (`logrotate`) | No Alert |
+| `unlink` / `rename` | `true` | `/var/log/syslog` / `.log` / `auth.log` | `false` (`rm` / `sh`) | **ALERT FIRED (WARNING)** |
+
+
 
 ### Falco Condition Breakdown
 

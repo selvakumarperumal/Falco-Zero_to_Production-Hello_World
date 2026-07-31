@@ -83,6 +83,22 @@ data:
 ```
 
 ## Detailed Explanation
+#### Truth Table — Kyverno CEL Evaluation
+
+| `has(spec.type)` | `spec.type` Value | `object.spec.type != 'NodePort'` | Policy Decision |
+|---|---|---|---|
+| `false` (omitted) | `ClusterIP` (default) | `true` | **PASS** |
+| `true` | `ClusterIP` / `LoadBalancer` | `true` | **PASS** |
+| `true` | `NodePort` | `false` | **FAIL** |
+
+#### Truth Table — Falco Runtime Detections
+
+| Service Spec Type | NodePort Allocation | Falco Alert Result |
+|---|---|---|
+| `ClusterIP` / `LoadBalancer` | None | No Alert |
+| `NodePort` | Exposed on Host NodePort | **ALERT FIRED (WARNING)** |
+
+
 
 ### Kyverno CEL Expression Breakdown
 

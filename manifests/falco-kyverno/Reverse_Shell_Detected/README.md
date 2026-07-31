@@ -58,6 +58,16 @@ data:
 ```
 
 ## Detailed Explanation
+#### Truth Table — Falco Runtime Detections
+
+| `container` | Process Name | Command Line Pattern | Falco Alert Result |
+|---|---|---|---|
+| `true` | `curl` | `https://api.example.com` | No Alert |
+| `true` | `nc` / `netcat` / `socat` | — | **ALERT FIRED (CRITICAL)** |
+| `true` | `bash` | `/dev/tcp/1.2.3.4/4444` | **ALERT FIRED (CRITICAL)** |
+| `true` | `python3` | `import socket...` | **ALERT FIRED (CRITICAL)** |
+
+
 
 ### Falco Condition Breakdown
 

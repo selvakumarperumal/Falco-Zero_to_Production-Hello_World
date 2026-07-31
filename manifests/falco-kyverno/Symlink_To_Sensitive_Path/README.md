@@ -55,6 +55,14 @@ data:
 ```
 
 ## Detailed Explanation
+#### Truth Table — Falco Runtime Detections
+
+| `container` | Symlink Target Path (`evt.arg.target`) | Falco Alert Result |
+|---|---|---|
+| `true` | `/tmp/data.txt` | No Alert |
+| `true` | `/etc/shadow` / `/proc/1/cwd` / `/sys/kernel` | **ALERT FIRED (CRITICAL)** |
+
+
 
 ### Falco Condition Breakdown
 

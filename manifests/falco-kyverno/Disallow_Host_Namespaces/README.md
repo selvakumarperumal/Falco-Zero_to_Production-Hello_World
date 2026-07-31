@@ -135,6 +135,25 @@ data:
 ---
 
 ## Detailed Explanation
+#### Truth Table — Kyverno CEL Evaluation
+
+| `has(hostPID)` | `hostPID` Value | `has(...) && ==true` | `!(...)` → Clause Result | Policy Decision |
+|---|---|---|---|---|
+| `false` (not set) | — | `false` | `true` | **PASS** |
+| `true` | `false` | `false` | `true` | **PASS** |
+| `true` | `true` | `true` | `false` | **FAIL** |
+
+*(Same truth table logic applies to `hostIPC` and `hostNetwork` fields)*
+
+#### Truth Table — Falco Runtime Detections
+
+| `evt.type` | `container` | `k8s.pod.host_pid` | `k8s.pod.host_network` | Falco Alert Result |
+|---|---|---|---|---|
+| `execve` / `execveat` | `true` | `false` | `false` | No Alert |
+| `execve` / `execveat` | `true` | `true` | `false` | **ALERT FIRED (CRITICAL)** |
+| `execve` / `execveat` | `true` | `false` | `true` | **ALERT FIRED (CRITICAL)** |
+
+
 
 ### Kyverno CEL Expression Breakdown
 

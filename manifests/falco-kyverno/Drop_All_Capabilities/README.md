@@ -87,6 +87,22 @@ data:
 ```
 
 ## Detailed Explanation
+#### Truth Table — Kyverno CEL Evaluation
+
+| `has(securityContext)` | `has(capabilities.drop)` | Includes `'ALL'` | Expression Result | Policy Decision |
+|---|---|---|---|---|
+| `false` | — | — | `false` | **FAIL** |
+| `true` | `true` | `['NET_ADMIN']` (missing `'ALL'`) | `false` | **FAIL** |
+| `true` | `true` | `['ALL']` | `true` | **PASS** |
+
+#### Truth Table — Falco Runtime Detections
+
+| `container` | Process / Command Pattern | Falco Alert Result |
+|---|---|---|
+| `true` | `nginx` | No Alert |
+| `true` | `nsenter` / `unshare` / `capsh` / `--cap-add` | **ALERT FIRED (CRITICAL)** |
+
+
 
 ### Kyverno CEL Expression Breakdown
 

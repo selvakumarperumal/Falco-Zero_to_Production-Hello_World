@@ -65,6 +65,15 @@ spec:
 ---
 
 ## Detailed Explanation
+#### Truth Table — Kyverno Generator Evaluation
+
+| Target Namespace Event | Source Secret (`default/regcred`) Exists | Target Secret Exists | Generator Result |
+|---|---|---|---|
+| `CREATE` | `false` | — | Skip generation (Source secret missing) |
+| `CREATE` | `true` | `false` | **GENERATE** (Clone `regcred` secret into target namespace) |
+| `UPDATE` | `true` | `true` | **SYNCHRONIZE** (Maintain secret consistency across namespaces) |
+
+
 
 ### Kyverno CEL GeneratingPolicy Breakdown
 

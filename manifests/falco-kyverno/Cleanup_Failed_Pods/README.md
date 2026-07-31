@@ -55,6 +55,15 @@ spec:
 ---
 
 ## Detailed Explanation
+#### Truth Table — Kyverno Cleanup Evaluation
+
+| `has(status.phase)` | `status.phase` Value | `status.phase == 'Failed'` | Policy Action |
+|---|---|---|---|
+| `false` | — | `false` | Retain Pod |
+| `true` | `'Running'` / `'Succeeded'` | `false` | Retain Pod |
+| `true` | `'Failed'` | `true` | **CLEANUP / DELETE POD** (Pod failed) |
+
+
 
 ### Kyverno CEL DeletingPolicy Breakdown
 

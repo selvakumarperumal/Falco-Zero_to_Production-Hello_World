@@ -90,6 +90,23 @@ data:
 ```
 
 ## Detailed Explanation
+#### Truth Table — Kyverno CEL Evaluation
+
+| `c.image` String | Approved Registry Prefix Match | Policy Decision |
+|---|---|---|
+| `quay.io/my-org/my-app:1.0` | `false` | **FAIL** |
+| `ghcr.io/my-org/my-app:1.0` | `true` (`ghcr.io/`) | **PASS** |
+| `123456789.dkr.ecr.us-east-1.amazonaws.com/app` | `true` (`.dkr.ecr.`) | **PASS** |
+| `nginx:1.25` (Library image) | `true` (`!c.image.contains('/')`) | **PASS** |
+
+#### Truth Table — Falco Runtime Detections
+
+| `container` | `proc.vpid` | `container.image.repository` | Falco Alert Result |
+|---|---|---|---|
+| `true` | `1` | `ghcr.io/my-org/app` | No Alert |
+| `true` | `1` | `untrusted-registry.net/app` | **ALERT FIRED (ERROR)** |
+
+
 
 ### Kyverno CEL Expression Breakdown
 

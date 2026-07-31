@@ -60,6 +60,15 @@ data:
 ```
 
 ## Detailed Explanation
+#### Truth Table — Falco Runtime Detections
+
+| `container` | `evt.is_open_read` | Target `fd.name` File | Process Excluded | Falco Alert Result |
+|---|---|---|---|---|
+| `true` | `true` | `/etc/hosts` | `false` | No Alert |
+| `true` | `true` | `/etc/shadow` / `private.pem` / `id_rsa` | `true` (`sshd`) | No Alert |
+| `true` | `true` | `/etc/shadow` / `private.pem` / `id_rsa` | `false` (`cat` / `python`) | **ALERT FIRED (ERROR)** |
+
+
 
 ### Falco Condition Breakdown
 

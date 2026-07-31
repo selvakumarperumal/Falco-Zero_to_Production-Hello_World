@@ -74,6 +74,15 @@ spec:
 ---
 
 ## Detailed Explanation
+#### Truth Table — Kyverno CEL Evaluation
+
+| Namespace Label `environment` | `has(spec.replicas)` | `spec.replicas` Value | `spec.replicas >= 2` | Policy Decision |
+|---|---|---|---|---|
+| `staging` | `true` | `1` | `false` | **PASS** (Exempt namespace) |
+| `production` | `true` | `1` | `false` | **FAIL** |
+| `production` | `true` | `2` / `3` | `true` | **PASS** |
+
+
 
 ### Kyverno CEL ValidatingPolicy Breakdown
 

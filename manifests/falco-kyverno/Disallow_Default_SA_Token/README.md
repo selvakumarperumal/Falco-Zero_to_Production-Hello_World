@@ -81,6 +81,23 @@ data:
 ```
 
 ## Detailed Explanation
+#### Truth Table — Kyverno CEL Evaluation
+
+| `has(automountServiceAccountToken)` | `automountServiceAccountToken` Value | `has(...) && ==true` | `!(...)` → Clause Result | Policy Decision |
+|---|---|---|---|---|
+| `false` (not set) | — | `false` | `true` | **PASS** |
+| `true` | `false` | `false` | `true` | **PASS** |
+| `true` | `true` | `true` | `false` | **FAIL** |
+
+#### Truth Table — Falco Runtime Detections
+
+| `evt.type` | `container` | `fd.name` Path | Falco Alert Result |
+|---|---|---|---|
+| `open` / `openat` | `false` (host) | `/var/run/secrets/.../token` | No Alert |
+| `open` / `openat` | `true` | `/etc/config` | No Alert |
+| `open` / `openat` | `true` | `/var/run/secrets/kubernetes.io/serviceaccount/token` | **ALERT FIRED (WARNING)** |
+
+
 
 ### Kyverno CEL Expression Breakdown
 

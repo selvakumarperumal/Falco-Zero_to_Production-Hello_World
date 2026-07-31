@@ -56,6 +56,15 @@ spec:
 ---
 
 ## Detailed Explanation
+#### Truth Table — Kyverno Cleanup Evaluation
+
+| `has(status.succeeded)` | `status.succeeded` Value | `status.succeeded > 0` | Policy Action |
+|---|---|---|---|
+| `false` | — | `false` | Retain Job (Not completed) |
+| `true` | `0` | `false` | Retain Job (In progress or failed) |
+| `true` | `>= 1` | `true` | **CLEANUP / DELETE JOB** (Job succeeded) |
+
+
 
 ### Kyverno CEL DeletingPolicy Breakdown
 

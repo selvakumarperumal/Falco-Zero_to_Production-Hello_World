@@ -53,6 +53,15 @@ data:
 ```
 
 ## Detailed Explanation
+#### Truth Table — Falco Runtime Detections
+
+| `container` | Process Name | `proc.tty != 0` (Interactive TTY) | Namespace Excluded | Falco Alert Result |
+|---|---|---|---|---|
+| `true` | `bash` | `false` (`0` - non-interactive script) | `false` | No Alert |
+| `true` | `bash` | `true` (`pty/0`) | `true` (`kube-system`) | No Alert |
+| `true` | `bash` / `sh` / `zsh` | `true` (`pty/0`) | `false` (`prod`) | **ALERT FIRED (WARNING)** |
+
+
 
 ### Falco Condition Breakdown
 

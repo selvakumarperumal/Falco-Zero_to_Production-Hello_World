@@ -78,6 +78,15 @@ spec:
 ---
 
 ## Detailed Explanation
+#### Truth Table — Kyverno Mutation Evaluation
+
+| `has(metadata.annotations)` | Annotation Key Present | Annotation Value | Kyverno Mutation Result |
+|---|---|---|---|
+| `false` | `false` | — | **NO MUTATION** |
+| `true` | `true` | `'false'` | **NO MUTATION** |
+| `true` | `true` | `'true'` | **MUTATE** (Inject sidecar proxy container) |
+
+
 
 ### Kyverno CEL MutatingPolicy Breakdown
 

@@ -103,6 +103,21 @@ data:
 ---
 
 ## Detailed Explanation
+#### Truth Table — Kyverno Mutation Evaluation
+
+| `has(resources.requests)` | `has(resources.limits)` | Kyverno Action |
+|---|---|---|
+| `true` | `true` | **NO MUTATION** (Retain user-specified limits) |
+| `false` | `false` | **MUTATE** (Inject default CPU/Memory requests & limits) |
+
+#### Truth Table — Falco Runtime Detections
+
+| `container` | Namespace Excluded | Pod Has Resource Limits | Falco Alert Result |
+|---|---|---|---|
+| `true` | `false` (`prod`) | `true` | No Alert |
+| `true` | `false` (`prod`) | `false` (unconstrained) | **ALERT FIRED (NOTICE)** |
+
+
 
 ### Kyverno CEL Expression Breakdown
 

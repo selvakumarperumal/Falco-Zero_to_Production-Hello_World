@@ -60,6 +60,15 @@ spec:
 ```
 
 ## Detailed Explanation
+#### Truth Table — Kyverno Mutation & Evaluation
+
+| `has(metadata.labels)` | `'pod-security.kubernetes.io/enforce' in labels` | Label Value | Match Condition Result | Kyverno Action |
+|---|---|---|---|---|
+| `false` | `false` | — | `true` | **MUTATE** (Inject `pod-security.kubernetes.io/enforce=baseline`) |
+| `true` | `false` | — | `true` | **MUTATE** (Inject `pod-security.kubernetes.io/enforce=baseline`) |
+| `true` | `true` | `"restricted"` / `"baseline"` | `false` | **NO MUTATION** (Retain existing PSS label) |
+
+
 
 ### Kyverno CEL Expression Breakdown
 

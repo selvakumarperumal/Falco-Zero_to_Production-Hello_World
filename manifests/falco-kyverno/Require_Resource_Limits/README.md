@@ -86,6 +86,22 @@ data:
 ```
 
 ## Detailed Explanation
+#### Truth Table — Kyverno CEL Evaluation
+
+| `has(resources)` | `has(resources.limits)` | `has(limits.cpu)` | `has(limits.memory)` | Policy Decision |
+|---|---|---|---|---|
+| `false` | — | — | — | **FAIL** |
+| `true` | `true` | `true` | `false` | **FAIL** |
+| `true` | `true` | `true` | `true` | **PASS** |
+
+#### Truth Table — Falco Runtime Detections
+
+| `container` | Process Name | Falco Alert Result |
+|---|---|---|
+| `true` | `nginx` | No Alert |
+| `true` | `stress` / `stress-ng` / `dd` | **ALERT FIRED (WARNING)** |
+
+
 
 ### Kyverno CEL Expression Breakdown
 

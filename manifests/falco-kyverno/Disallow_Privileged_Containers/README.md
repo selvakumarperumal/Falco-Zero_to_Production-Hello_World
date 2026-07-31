@@ -80,6 +80,22 @@ data:
 ```
 
 ## Detailed Explanation
+#### Truth Table — Kyverno CEL Evaluation
+
+| `has(securityContext)` | `has(privileged)` | `privileged` Value | `has(...) && ==true` | `!(...)` → Clause Result | Policy Decision |
+|---|---|---|---|---|---|
+| `false` (not set) | — | — | `false` | `true` | **PASS** |
+| `true` | `true` | `false` | `false` | `true` | **PASS** |
+| `true` | `true` | `true` | `true` | `false` | **FAIL** |
+
+#### Truth Table — Falco Runtime Detections
+
+| `container` | `container.privileged` | Falco Alert Result |
+|---|---|---|
+| `true` | `false` | No Alert |
+| `true` | `true` | **ALERT FIRED (CRITICAL)** |
+
+
 
 ### Kyverno CEL Expression Breakdown
 

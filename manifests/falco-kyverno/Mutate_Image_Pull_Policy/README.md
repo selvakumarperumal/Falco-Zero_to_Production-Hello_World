@@ -65,6 +65,14 @@ spec:
 ```
 
 ## Detailed Explanation
+#### Truth Table — Kyverno Mutation Evaluation
+
+| Container Image Tag | Existing `imagePullPolicy` | Kyverno Action |
+|---|---|---|
+| `:1.25` | `IfNotPresent` | **NO MUTATION** |
+| `:latest` / untagged | `IfNotPresent` / omitted | **MUTATE** (Set `imagePullPolicy: Always`) |
+
+
 
 ### Kyverno CEL Expression Breakdown
 
