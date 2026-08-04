@@ -1,7 +1,7 @@
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
-  name: {{.Values.falco.falcosidekick.webui.redis.storageClass | quote}}
+  name: {{ .Values.falco.falcosidekick.webui.redis.storageClass | quote }}
   annotations:
     storageclass.kubernetes.io/is-default-class: "true"
   labels:
@@ -9,5 +9,6 @@ metadata:
 provisioner: ebs.csi.aws.com
 volumeBindingMode: WaitForFirstConsumer
 allowVolumeExpansion: true
+reclaimPolicy: Delete
 parameters:
   type: gp3

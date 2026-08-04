@@ -50,8 +50,8 @@ variable "eks_managed_node_groups" {
   }
 }
 
-variable "arcocd_chart_version" {
+variable "argocd_chart_version" {
   description = "ArgoCD Chart Version"
   type        = string
-  default     = "10.1.3"
+  default     = "10.2.2"
 }
