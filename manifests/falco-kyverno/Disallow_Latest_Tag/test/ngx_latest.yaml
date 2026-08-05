@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ngx-latest
+  labels:
+    app.kubernetes.io/name: ngx-latest
+spec:
+  containers:
+  - name: ngx-latest
+    image: nginx:latest
+    resources:
+      requests:
+        memory: "64Mi"
+        cpu: "50m"
+      limits:
+        memory: "128Mi"
+        cpu: "100m"
